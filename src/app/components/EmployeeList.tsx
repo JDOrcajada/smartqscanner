@@ -1,11 +1,12 @@
-import { useState, useEffect, useRef } from "react";
-import { Plus, Pencil, Trash2, User, X, AlertTriangle } from "lucide-react";
+import React, { useState, useEffect } from "react";
+import { Plus, Pencil, Trash2, X, AlertTriangle, User } from "lucide-react";
 
 interface Employee {
-  id: string;
+  id: number;
   name: string;
   role: string;
-  profilePicture: string;
+  picture: string | null;
+  status: string;
 }
 
 const API = "http://localhost:5000/api";
@@ -22,22 +23,26 @@ export function EmployeeList() {
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [loading, setLoading] = useState(true);
   const [pageError, setPageError] = useState("");
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [previewPicture, setPreviewPicture] = useState<{ src: string; name: string } | null>(null);
+  const [selectedId, setSelectedId] = useState<number | null>(null);
 
   // Modal
   const [modalMode, setModalMode] = useState<"insert" | "edit" | null>(null);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [showDeletePasswordConfirm, setShowDeletePasswordConfirm] = useState(false);
 
   // Form fields
-  const [formId, setFormId] = useState("");
   const [formName, setFormName] = useState("");
   const [formRole, setFormRole] = useState("");
-  const [formPicture, setFormPicture] = useState("");
   const [formError, setFormError] = useState("");
   const [formLoading, setFormLoading] = useState(false);
 
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  // Delete confirmation
+  const [deletePassword, setDeletePassword] = useState("");
+  const [deleteError, setDeleteError] = useState("");
+  const [deleteLoading, setDeleteLoading] = useState(false);
+
+  // Picture modal
+  const [pictureModal, setPictureModal] = useState<Employee | null>(null);
 
   const selectedEmployee = employees.find((e) => e.id === selectedId) ?? null;
 
@@ -60,40 +65,74 @@ export function EmployeeList() {
   }, []);
 
   const openInsert = () => {
-    setFormId("");
     setFormName("");
     setFormRole("");
-    setFormPicture("");
     setFormError("");
     setModalMode("insert");
   };
 
   const openEdit = () => {
     if (!selectedEmployee) return;
-    setFormId(selectedEmployee.id);
     setFormName(selectedEmployee.name);
     setFormRole(selectedEmployee.role);
-    setFormPicture(selectedEmployee.profilePicture);
     setFormError("");
     setModalMode("edit");
   };
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const openPictureModal = (emp: Employee) => {
+    setPictureModal(emp);
+  };
+
+  const openDeleteConfirm = () => {
+    if (!selectedEmployee) return;
+    setDeletePassword("");
+    setDeleteError("");
+    setShowDeletePasswordConfirm(false);
+    setShowDeleteConfirm(true);
+  };
+
+  const closeDeleteFlow = () => {
+    setDeletePassword("");
+    setDeleteError("");
+    setDeleteLoading(false);
+    setShowDeleteConfirm(false);
+    setShowDeletePasswordConfirm(false);
+  };
+
+  const handlePictureChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (!file) return;
-    if (file.size > 2 * 1024 * 1024) {
-      setFormError("Image must be smaller than 2 MB.");
-      return;
-    }
+    if (!file || !pictureModal) return;
     const reader = new FileReader();
-    reader.onload = () => setFormPicture(reader.result as string);
+    reader.onload = async () => {
+      const base64 = reader.result as string;
+      await fetch(`${API}/employees/${pictureModal.id}`, {
+        method: "PUT",
+        headers: getAuthHeaders(),
+        body: JSON.stringify({ picture: base64 }),
+      });
+      await fetchEmployees();
+      window.dispatchEvent(new Event("profile-updated"));
+      setPictureModal(null);
+    };
     reader.readAsDataURL(file);
+  };
+
+  const handlePictureRemove = async () => {
+    if (!pictureModal) return;
+    await fetch(`${API}/employees/${pictureModal.id}`, {
+      method: "PUT",
+      headers: getAuthHeaders(),
+      body: JSON.stringify({ picture: null }),
+    });
+    await fetchEmployees();
+    window.dispatchEvent(new Event("profile-updated"));
+    setPictureModal(null);
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!formId.trim() || !formName.trim() || !formRole.trim()) {
-      setFormError("ID, Name, and Role are required.");
+    if (!formName.trim()) {
+      setFormError("Name is required.");
       return;
     }
     setFormLoading(true);
@@ -104,10 +143,8 @@ export function EmployeeList() {
           method: "POST",
           headers: getAuthHeaders(),
           body: JSON.stringify({
-            id: formId,
             name: formName,
             role: formRole,
-            profilePicture: formPicture,
           }),
         });
         const data = await res.json();
@@ -119,7 +156,6 @@ export function EmployeeList() {
           body: JSON.stringify({
             name: formName,
             role: formRole,
-            profilePicture: formPicture,
           }),
         });
         const data = await res.json();
@@ -137,21 +173,30 @@ export function EmployeeList() {
 
   const handleDelete = async () => {
     if (!selectedId) return;
+    if (!deletePassword) {
+      setDeleteError("Admin password is required.");
+      return;
+    }
+
+    setDeleteLoading(true);
+    setDeleteError("");
     try {
       const res = await fetch(`${API}/employees/${selectedId}`, {
         method: "DELETE",
         headers: getAuthHeaders(),
+        body: JSON.stringify({ password: deletePassword }),
       });
+      const data = await res.json();
       if (!res.ok) {
-        const data = await res.json();
         throw new Error(data.message);
       }
       setSelectedId(null);
-      setShowDeleteConfirm(false);
+      closeDeleteFlow();
       await fetchEmployees();
     } catch (err: any) {
-      setPageError(err.message);
-      setShowDeleteConfirm(false);
+      setDeleteError(err.message);
+    } finally {
+      setDeleteLoading(false);
     }
   };
 
@@ -183,7 +228,7 @@ export function EmployeeList() {
             </button>
 
             <button
-              onClick={() => selectedId && setShowDeleteConfirm(true)}
+              onClick={openDeleteConfirm}
               disabled={!selectedId}
               className="flex items-center gap-2 px-4 py-2 text-sm text-white rounded-lg transition-colors hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed"
               style={{ backgroundColor: "#DC2626" }}
@@ -217,9 +262,6 @@ export function EmployeeList() {
               <table className="w-full">
                 <thead className="bg-gray-50 border-b border-gray-200">
                   <tr>
-                    <th className="px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider w-16">
-                      Photo
-                    </th>
                     <th className="px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">
                       Employee ID
                     </th>
@@ -229,13 +271,19 @@ export function EmployeeList() {
                     <th className="px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">
                       Role
                     </th>
+                    <th className="px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">
+                      Photo
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">
+                      Status
+                    </th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
                   {employees.length === 0 ? (
                     <tr>
                       <td
-                        colSpan={4}
+                        colSpan={5}
                         className="px-6 py-12 text-center text-gray-400"
                       >
                         No employees found. Click Insert to add one.
@@ -257,21 +305,6 @@ export function EmployeeList() {
                               : undefined
                           }
                         >
-                          <td className="px-6 py-3" onClick={(e) => e.stopPropagation()}>
-                            {emp.profilePicture ? (
-                              <img
-                                src={emp.profilePicture}
-                                alt={emp.name}
-                                onClick={() => setPreviewPicture({ src: emp.profilePicture, name: emp.name })}
-                                className="w-9 h-9 rounded-full object-cover border border-gray-200 cursor-zoom-in hover:ring-2 hover:ring-offset-1 transition-all"
-                                style={{ '--tw-ring-color': '#32AD32' } as React.CSSProperties}
-                              />
-                            ) : (
-                              <div className="w-9 h-9 rounded-full bg-gray-100 flex items-center justify-center border border-gray-200">
-                                <User className="w-5 h-5 text-gray-400" />
-                              </div>
-                            )}
-                          </td>
                           <td className="px-6 py-3 text-sm font-medium text-gray-900">
                             {emp.id}
                           </td>
@@ -279,7 +312,30 @@ export function EmployeeList() {
                             {emp.name}
                           </td>
                           <td className="px-6 py-3 text-sm text-gray-600">
-                            {emp.role}
+                            {emp.role || <span className="text-gray-300 italic">—</span>}
+                          </td>
+                          <td className="px-6 py-3 text-sm text-gray-600">
+                            <button
+                              onClick={(e) => { e.stopPropagation(); openPictureModal(emp); }}
+                              className="focus:outline-none"
+                            >
+                              {emp.picture
+                                ? <img src={emp.picture} className="w-10 h-10 rounded-full object-cover" alt="photo" />
+                                : <div className="w-10 h-10 rounded-full bg-gray-100 flex items-center justify-center">
+                                    <User className="w-5 h-5 text-gray-400" />
+                                  </div>
+                              }
+                            </button>
+                          </td>
+                          <td className="px-6 py-3 text-sm">
+                            <span
+                              className="px-2 py-0.5 rounded-full text-xs font-medium"
+                              style={emp.status === 'ACTIVE'
+                                ? { backgroundColor: '#E8F5E8', color: '#32AD32' }
+                                : { backgroundColor: '#F3F4F6', color: '#6B7280' }}
+                            >
+                              {emp.status}
+                            </span>
                           </td>
                         </tr>
                       );
@@ -309,25 +365,10 @@ export function EmployeeList() {
             </div>
 
             <form onSubmit={handleSubmit} className="px-6 py-5 space-y-4">
-              {/* Employee ID */}
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Employee ID
-                </label>
-                <input
-                  type="text"
-                  value={formId}
-                  onChange={(e) => setFormId(e.target.value)}
-                  disabled={modalMode === "edit"}
-                  placeholder="e.g. EMP009"
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-1 disabled:bg-gray-50 disabled:text-gray-400"
-                />
-              </div>
-
               {/* Employee Name */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Employee Name
+                  Employee Name <span className="text-red-500">*</span>
                 </label>
                 <input
                   type="text"
@@ -347,55 +388,9 @@ export function EmployeeList() {
                   type="text"
                   value={formRole}
                   onChange={(e) => setFormRole(e.target.value)}
-                  placeholder="e.g. Engineer"
+                  placeholder="e.g. Technician"
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-1"
                 />
-              </div>
-
-              {/* Profile Picture */}
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Profile Picture
-                </label>
-                <div className="flex items-center gap-4">
-                  {formPicture ? (
-                    <img
-                      src={formPicture}
-                      alt="preview"
-                      className="w-14 h-14 rounded-full object-cover border border-gray-200"
-                    />
-                  ) : (
-                    <div className="w-14 h-14 rounded-full bg-gray-100 flex items-center justify-center border border-gray-200">
-                      <User className="w-7 h-7 text-gray-400" />
-                    </div>
-                  )}
-                  <div className="flex flex-col gap-1">
-                    <button
-                      type="button"
-                      onClick={() => fileInputRef.current?.click()}
-                      className="px-3 py-1.5 text-sm border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
-                    >
-                      {formPicture ? "Change Photo" : "Upload Photo"}
-                    </button>
-                    {formPicture && (
-                      <button
-                        type="button"
-                        onClick={() => setFormPicture("")}
-                        className="text-xs text-red-500 hover:text-red-700 text-left"
-                      >
-                        Remove photo
-                      </button>
-                    )}
-                  </div>
-                </div>
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept="image/*"
-                  onChange={handleFileChange}
-                  className="hidden"
-                />
-                <p className="mt-1 text-xs text-gray-400">Max 2 MB. JPG, PNG, WebP accepted.</p>
               </div>
 
               {formError && (
@@ -428,34 +423,6 @@ export function EmployeeList() {
         </div>
       )}
 
-      {/* ── Image Preview Modal ── */}
-      {previewPicture && (
-        <div
-          className="fixed inset-0 bg-black/70 flex items-center justify-center z-50"
-          onClick={() => setPreviewPicture(null)}
-        >
-          <div
-            className="bg-white rounded-2xl shadow-2xl p-4 max-w-sm w-full mx-4 flex flex-col items-center gap-4"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="flex items-center justify-between w-full">
-              <span className="font-semibold text-gray-900 truncate">{previewPicture.name}</span>
-              <button
-                onClick={() => setPreviewPicture(null)}
-                className="text-gray-400 hover:text-gray-600 ml-3 shrink-0"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-            <img
-              src={previewPicture.src}
-              alt={previewPicture.name}
-              className="w-64 h-64 rounded-xl object-cover border border-gray-200"
-            />
-          </div>
-        </div>
-      )}
-
       {/* ── Delete Confirmation ── */}
       {showDeleteConfirm && selectedEmployee && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
@@ -475,17 +442,105 @@ export function EmployeeList() {
             </p>
             <div className="flex gap-3">
               <button
-                onClick={handleDelete}
+                onClick={() => {
+                  setDeleteError("");
+                  setShowDeleteConfirm(false);
+                  setShowDeletePasswordConfirm(true);
+                }}
                 className="flex-1 py-2.5 text-sm text-white rounded-lg bg-red-600 hover:bg-red-700 transition-colors"
               >
                 Delete
               </button>
               <button
-                onClick={() => setShowDeleteConfirm(false)}
+                onClick={closeDeleteFlow}
                 className="px-5 py-2.5 text-sm border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
               >
                 Cancel
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showDeletePasswordConfirm && selectedEmployee && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-sm mx-4 p-6">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-10 h-10 rounded-full bg-red-100 flex items-center justify-center shrink-0">
+                <AlertTriangle className="w-5 h-5 text-red-600" />
+              </div>
+              <h3 className="text-lg font-semibold text-gray-900">
+                Confirm Admin Password
+              </h3>
+            </div>
+            <p className="text-sm text-gray-600 mb-4">
+              Enter your admin password to permanently delete <strong>{selectedEmployee.name}</strong> ({selectedEmployee.id}). This also removes their attendance and admin records from the database.
+            </p>
+            <input
+              type="password"
+              value={deletePassword}
+              onChange={(e) => {
+                setDeletePassword(e.target.value);
+                setDeleteError("");
+              }}
+              placeholder="Admin password"
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-1 mb-3"
+              autoFocus
+            />
+            {deleteError && (
+              <p className="text-sm text-red-600 mb-3">{deleteError}</p>
+            )}
+            <div className="flex gap-3">
+              <button
+                onClick={handleDelete}
+                disabled={deleteLoading}
+                className="flex-1 py-2.5 text-sm text-white rounded-lg bg-red-600 hover:bg-red-700 transition-colors disabled:opacity-50"
+              >
+                {deleteLoading ? "Deleting..." : "Confirm Delete"}
+              </button>
+              <button
+                onClick={() => {
+                  setDeleteError("");
+                  setShowDeletePasswordConfirm(false);
+                  setShowDeleteConfirm(true);
+                }}
+                disabled={deleteLoading}
+                className="px-5 py-2.5 text-sm border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors disabled:opacity-50"
+              >
+                Back
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Picture Modal ── */}
+      {pictureModal && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-sm mx-4 p-6">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-semibold text-gray-900">Employee Photo</h3>
+              <button onClick={() => setPictureModal(null)} className="text-gray-400 hover:text-gray-600">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="flex flex-col items-center gap-4">
+              {pictureModal.picture
+                ? <img src={pictureModal.picture} className="w-40 h-40 rounded-full object-cover" alt="photo" />
+                : <div className="w-40 h-40 rounded-full bg-gray-100 flex items-center justify-center">
+                    <User className="w-16 h-16 text-gray-400" />
+                  </div>
+              }
+              <label className="cursor-pointer px-4 py-2 text-sm text-white rounded-lg hover:opacity-90 transition-colors" style={{ backgroundColor: "#32AD32" }}>
+                {pictureModal.picture ? "Change Photo" : "Upload Photo"}
+                <input type="file" accept="image/*" className="hidden" onChange={handlePictureChange} />
+              </label>
+              {pictureModal.picture && (
+                <button onClick={handlePictureRemove} className="text-sm text-red-500 hover:underline">
+                  Remove Photo
+                </button>
+              )}
+              <p className="text-xs text-gray-400 text-center">For best results, use a square photo under 500KB.</p>
             </div>
           </div>
         </div>

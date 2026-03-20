@@ -1,69 +1,75 @@
-import { exec } from 'child_process';
-import { promisify } from 'util';
+import * as Firebird from 'node-firebird';
 import { config } from './config.js';
 
-const execAsync = promisify(exec);
-
-// SQL queries to execute via isql
-const buildIsqlCommand = (sql: string): string => {
-  const escapedSql = sql.replace(/"/g, '\\"');
-  return `isql -user ${config.DB_USER} -password ${config.DB_PASSWORD} "${config.DB_DATABASE}" -c "${escapedSql}"`;
+const options: Firebird.Options = {
+  host: String(config.DB_HOST),
+  port: Number(config.DB_PORT),
+  database: String(config.DB_DATABASE),
+  user: String(config.DB_USER),
+  password: String(config.DB_PASSWORD),
+  lowercase_keys: true,
 };
 
-export const initializeDbPool = async (): Promise<void> => {
-  try {
-    // Test connection
-    const testSql = 'SELECT COUNT(*) FROM EMPLOYEES;';
-    await query(testSql);
-    console.log('✓ Connected to Firebird database');
-  } catch (error) {
-    console.error('Failed to connect to Firebird database:', error);
-    throw error;
-  }
-};
+const pool = Firebird.pool(5, options);
 
-export const query = async (sql: string, params?: any[]): Promise<any[]> => {
-  try {
-    // Simple parameter replacement (be careful with this in production)
-    let finalSql = sql;
-    if (params && params.length > 0) {
-      params.forEach((param) => {
-        const value = typeof param === 'string' ? `'${param.replace(/'/g, "''")}'` : param;
-        finalSql = finalSql.replace('?', value);
+// Resolves any BLOB fields returned by node-firebird (they come back as functions)
+const resolveBlobs = (rows: any[]): Promise<any[]> =>
+  Promise.all(
+    rows.map((row) => {
+      const blobKeys = Object.keys(row).filter((k) => typeof row[k] === 'function');
+      if (!blobKeys.length) return Promise.resolve(row);
+      return Promise.all(
+        blobKeys.map(
+          (key) =>
+            new Promise<void>((res) => {
+              (row[key] as Function)((err: any, _: string, e: any) => {
+                if (err || !e) { row[key] = null; res(); return; }
+                const chunks: Buffer[] = [];
+                e.on('data', (c: Buffer) => chunks.push(c));
+                e.on('end', () => { row[key] = Buffer.concat(chunks).toString('utf8'); res(); });
+                e.on('error', () => { row[key] = null; res(); });
+              });
+            })
+        )
+      ).then(() => row);
+    })
+  );
+
+export const initializeDbPool = (): Promise<void> =>
+  new Promise((resolve, reject) => {
+    pool.get((err, db) => {
+      if (err) {
+        console.error('Failed to connect to Firebird database:', err);
+        return reject(err);
+      }
+      db.detach();
+      console.log('✓ Connected to Firebird database');
+      resolve();
+    });
+  });
+
+export const query = <T = any>(sql: string, params: any[] = []): Promise<T[]> =>
+  new Promise((resolve, reject) => {
+    pool.get((err, db) => {
+      if (err) return reject(err);
+      db.query(sql, params, (err, result) => {
+        db.detach();
+        if (err) return reject(err);
+        resolveBlobs(result ?? []).then((rows) => resolve(rows as T[])).catch(reject);
       });
-    }
+    });
+  });
 
-    const command = buildIsqlCommand(finalSql);
-    const { stdout } = await execAsync(command);
-    
-    // Parse the output (basic parsing)
-    const lines = stdout.trim().split('\n').filter(line => line.trim());
-    return lines;
-  } catch (error: any) {
-    console.error('Query error:', error.message);
-    throw error;
-  }
-};
-
-export const execute = async (sql: string, params?: any[]): Promise<void> => {
-  try {
-    // Simple parameter replacement
-    let finalSql = sql;
-    if (params && params.length > 0) {
-      params.forEach((param) => {
-        const value = typeof param === 'string' ? `'${param.replace(/'/g, "''")}'` : param;
-        finalSql = finalSql.replace('?', value);
+export const execute = (sql: string, params: any[] = []): Promise<void> =>
+  new Promise((resolve, reject) => {
+    pool.get((err, db) => {
+      if (err) return reject(err);
+      db.execute(sql, params, (err) => {
+        db.detach();
+        if (err) return reject(err);
+        resolve();
       });
-    }
-
-    const command = buildIsqlCommand(finalSql);
-    await execAsync(command);
-  } catch (error: any) {
-    console.error('Execute error:', error.message);
-    throw error;
-  }
-};
-
-export const getDb = () => null;
+    });
+  });
 
 

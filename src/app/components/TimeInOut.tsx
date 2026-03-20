@@ -1,54 +1,98 @@
 import { useState } from "react";
-import { CheckCircle, UserCheck, Search } from "lucide-react";
-import { employees } from "../data/mockData";
+import { CheckCircle, UserCheck } from "lucide-react";
+
+const API = "http://localhost:5000/api";
+
+function getAuthHeaders(): Record<string, string> {
+  const token = localStorage.getItem("authToken");
+  return { "Content-Type": "application/json", Authorization: `Bearer ${token}` };
+}
+
+const STATUS_OPTIONS = [
+  { value: "", label: "Auto-compute" },
+  { value: "PRESENT", label: "Present" },
+  { value: "LATE", label: "Late" },
+  { value: "HALF DAY", label: "Half Day" },
+  { value: "UNDERTIME", label: "Undertime" },
+  { value: "ABSENT", label: "Absent" },
+  { value: "CLOCKED IN", label: "Clocked In" },
+  { value: "OVERTIME 1HR", label: "Overtime 1hr" },
+  { value: "OVERTIME 2HRS", label: "Overtime 2hrs" },
+  { value: "OVERTIME 3HRS", label: "Overtime 3hrs" },
+  { value: "OVERTIME 4HRS", label: "Overtime 4hrs" },
+  { value: "OVERTIME 5HRS", label: "Overtime 5hrs" },
+  { value: "OVERTIME 6HRS", label: "Overtime 6hrs" },
+];
 
 type SubmitStatus = "idle" | "loading" | "success" | "error";
-type ActionType = "Time In" | "Time Out";
 
 export function TimeInOut() {
-  const [inputValue, setInputValue] = useState("");
-  const [action, setAction] = useState<ActionType>("Time In");
+  const [employeeId, setEmployeeId] = useState("");
+  const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
+  const [timeIn, setTimeIn] = useState("");
+  const [timeOut, setTimeOut] = useState("");
+  const [location, setLocation] = useState<"OFFICE" | "ONSITE">("OFFICE");
+  const [site, setSite] = useState("");
+  const [statusOverride, setStatusOverride] = useState("");
   const [submitStatus, setSubmitStatus] = useState<SubmitStatus>("idle");
-  const [foundEmployee, setFoundEmployee] = useState<typeof employees[0] | null>(null);
   const [errorMessage, setErrorMessage] = useState("");
-
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!inputValue.trim()) return;
-
-    setSubmitStatus("loading");
-    setErrorMessage("");
-
-    // Search by ID or name (case-insensitive)
-    const match = employees.find(
-      (emp) =>
-        emp.id.toLowerCase() === inputValue.trim().toLowerCase() ||
-        emp.name.toLowerCase().includes(inputValue.trim().toLowerCase())
-    );
-
-    setTimeout(() => {
-      if (match) {
-        setFoundEmployee(match);
-        setSubmitStatus("success");
-
-        // Reset after 5 seconds
-        setTimeout(() => {
-          setSubmitStatus("idle");
-          setFoundEmployee(null);
-          setInputValue("");
-        }, 5000);
-      } else {
-        setErrorMessage("Employee not found. Check the ID or name and try again.");
-        setSubmitStatus("error");
-      }
-    }, 600);
-  };
+  const [successMsg, setSuccessMsg] = useState("");
 
   const handleReset = () => {
     setSubmitStatus("idle");
-    setFoundEmployee(null);
-    setInputValue("");
     setErrorMessage("");
+    setSuccessMsg("");
+    setEmployeeId("");
+    setDate(new Date().toISOString().slice(0, 10));
+    setTimeIn("");
+    setTimeOut("");
+    setLocation("OFFICE");
+    setSite("");
+    setStatusOverride("");
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const id = parseInt(employeeId.trim(), 10);
+    if (isNaN(id)) {
+      setSubmitStatus("error");
+      setErrorMessage("Employee ID must be a number");
+      return;
+    }
+    if (!timeIn) {
+      setSubmitStatus("error");
+      setErrorMessage("Time In is required");
+      return;
+    }
+    setSubmitStatus("loading");
+    setErrorMessage("");
+    try {
+      const body: Record<string, any> = { employeeId: id, date, timeIn, location };
+      if (timeOut) body.timeOut = timeOut;
+      if (location === "ONSITE" && site.trim()) body.site = site.trim();
+      if (statusOverride) body.status = statusOverride;
+
+      const res = await fetch(`${API}/attendance/admin`, {
+        method: "POST",
+        headers: getAuthHeaders(),
+        body: JSON.stringify(body),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setSubmitStatus("error");
+        setErrorMessage(data.message || "Failed to save attendance record");
+        return;
+      }
+      const dateLabel = new Date(date + "T00:00:00").toLocaleDateString("en-US", {
+        month: "short", day: "numeric", year: "numeric",
+      });
+      setSuccessMsg(`${data.message} — Employee #${id} on ${dateLabel}`);
+      setSubmitStatus("success");
+      setTimeout(() => handleReset(), 5000);
+    } catch {
+      setSubmitStatus("error");
+      setErrorMessage("Cannot reach server. Check your connection.");
+    }
   };
 
   return (
@@ -57,54 +101,122 @@ export function TimeInOut() {
         <h2 className="text-2xl font-semibold text-gray-900 mb-8">Time In / Time Out</h2>
 
         <div className="bg-white rounded-lg border border-gray-200 p-12">
-          {(submitStatus === "idle" || submitStatus === "error") && (
-            <div className="max-w-md mx-auto">
+          {(submitStatus === "idle" || submitStatus === "error" || submitStatus === "loading") && (
+            <div className="max-w-lg mx-auto">
               <div className="flex items-center justify-center w-16 h-16 rounded-full mx-auto mb-6" style={{ backgroundColor: "#E8F5E8" }}>
                 <UserCheck className="w-8 h-8" style={{ color: "#32AD32" }} />
               </div>
 
-              <h3 className="text-xl font-semibold text-gray-900 text-center mb-2">
-                Mark Attendance
-              </h3>
-              <p className="text-gray-500 text-center mb-8">
-                Enter the employee ID or name to record attendance
+              <h3 className="text-xl font-semibold text-gray-900 text-center mb-2">Manual Attendance Entry</h3>
+              <p className="text-gray-500 text-center mb-8 text-sm">
+                Override or create an attendance record for any employee and date.
               </p>
 
               <form onSubmit={handleSubmit} className="space-y-4">
-                {/* Action toggle */}
-                <div className="flex rounded-lg border border-gray-200 overflow-hidden mb-6">
-                  {(["Time In", "Time Out"] as ActionType[]).map((opt) => (
-                    <button
-                      key={opt}
-                      type="button"
-                      onClick={() => setAction(opt)}
-                      className="flex-1 py-2.5 text-sm font-medium transition-colors"
-                      style={
-                        action === opt
-                          ? { backgroundColor: "#32AD32", color: "#fff" }
-                          : { backgroundColor: "#fff", color: "#374151" }
-                      }
-                    >
-                      {opt}
-                    </button>
-                  ))}
+                {/* Row 1: Employee ID + Date */}
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Employee ID <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      type="text"
+                      value={employeeId}
+                      onChange={(e) => { setEmployeeId(e.target.value); if (submitStatus === "error") setSubmitStatus("idle"); }}
+                      placeholder="e.g. 103"
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none"
+                      autoFocus
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Date <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      type="date"
+                      value={date}
+                      onChange={(e) => setDate(e.target.value)}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none"
+                    />
+                  </div>
                 </div>
 
-                {/* Input */}
-                <div className="relative">
-                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-                  <input
-                    type="text"
-                    value={inputValue}
-                    onChange={(e) => {
-                      setInputValue(e.target.value);
-                      if (submitStatus === "error") setSubmitStatus("idle");
-                    }}
-                    placeholder="Employee ID or Name (e.g. EMP001 or John)"
-                    className="w-full pl-10 pr-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-opacity-50"
-                    style={{ '--tw-ring-color': '#32AD32' } as React.CSSProperties}
-                    autoFocus
-                  />
+                {/* Row 2: Time In + Time Out */}
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Time In <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      type="time"
+                      value={timeIn}
+                      onChange={(e) => setTimeIn(e.target.value)}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Time Out <span className="text-gray-400 text-xs">(optional)</span>
+                    </label>
+                    <input
+                      type="time"
+                      value={timeOut}
+                      onChange={(e) => setTimeOut(e.target.value)}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none"
+                    />
+                  </div>
+                </div>
+
+                {/* Row 3: Location + Site */}
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Location</label>
+                    <select
+                      value={location}
+                      onChange={(e) => {
+                        setLocation(e.target.value as "OFFICE" | "ONSITE");
+                        if (e.target.value !== "ONSITE") setSite("");
+                      }}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none bg-white"
+                    >
+                      <option value="OFFICE">Office</option>
+                      <option value="ONSITE">Onsite</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className={`block text-sm font-medium mb-1 ${location !== "ONSITE" ? "text-gray-400" : "text-gray-700"}`}>
+                      Site{location !== "ONSITE" && <span className="text-xs font-normal"> (select Onsite first)</span>}
+                    </label>
+                    <input
+                      type="text"
+                      value={site}
+                      onChange={(e) => setSite(e.target.value)}
+                      placeholder="e.g. BGC Office"
+                      disabled={location !== "ONSITE"}
+                      className={`w-full px-3 py-2 border rounded-lg focus:outline-none ${
+                        location !== "ONSITE"
+                          ? "border-gray-200 bg-gray-50 text-gray-400 cursor-not-allowed"
+                          : "border-gray-300"
+                      }`}
+                    />
+                  </div>
+                </div>
+
+                {/* Row 4: Status override */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Status Override{" "}
+                    <span className="text-gray-400 text-xs font-normal">(leave blank to auto-compute)</span>
+                  </label>
+                  <select
+                    value={statusOverride}
+                    onChange={(e) => setStatusOverride(e.target.value)}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none bg-white"
+                  >
+                    {STATUS_OPTIONS.map((opt) => (
+                      <option key={opt.value} value={opt.value}>{opt.label}</option>
+                    ))}
+                  </select>
                 </div>
 
                 {/* Error */}
@@ -115,66 +227,26 @@ export function TimeInOut() {
                 {/* Submit */}
                 <button
                   type="submit"
-                  disabled={!inputValue.trim() || submitStatus === "loading"}
+                  disabled={!employeeId.trim() || !timeIn || submitStatus === "loading"}
                   className="w-full py-3 text-white rounded-lg font-medium transition-colors disabled:opacity-50"
                   style={{ backgroundColor: "#32AD32" }}
                 >
-                  {submitStatus === "loading" ? "Processing..." : `Record ${action}`}
+                  {submitStatus === "loading" ? "Saving..." : "Save Attendance Record"}
                 </button>
               </form>
             </div>
           )}
 
-          {submitStatus === "success" && foundEmployee && (
+          {submitStatus === "success" && (
             <div className="text-center">
-              <div className="inline-flex items-center justify-center w-48 h-48 rounded-lg mb-6" style={{ backgroundColor: "#E8F5E8" }}>
-                <CheckCircle className="w-24 h-24" style={{ color: "#32AD32" }} />
+              <div className="inline-flex items-center justify-center w-24 h-24 rounded-full mb-6" style={{ backgroundColor: "#E8F5E8" }}>
+                <CheckCircle className="w-12 h-12" style={{ color: "#32AD32" }} />
               </div>
-
-              <div className="mb-6 p-6 bg-green-50 rounded-lg inline-block">
-                <div className="text-2xl font-semibold mb-2" style={{ color: "#32AD32" }}>
-                  {action} Recorded Successfully!
-                </div>
-                <p className="text-gray-600">
-                  {new Date().toLocaleTimeString("en-US", {
-                    hour: "2-digit",
-                    minute: "2-digit",
-                    second: "2-digit",
-                  })}
-                </p>
-              </div>
-
-              <div className="bg-white border border-gray-200 rounded-lg p-6 max-w-md mx-auto">
-                <h4 className="text-lg font-semibold text-gray-900 mb-4">Employee Information</h4>
-
-                <div className="space-y-3 text-left">
-                  <div className="flex justify-between items-center py-2 border-b border-gray-100">
-                    <span className="text-gray-600">Employee Name:</span>
-                    <span className="font-semibold text-gray-900">{foundEmployee.name}</span>
-                  </div>
-
-                  <div className="flex justify-between items-center py-2 border-b border-gray-100">
-                    <span className="text-gray-600">Employee ID:</span>
-                    <span className="font-semibold text-gray-900">{foundEmployee.id}</span>
-                  </div>
-
-                  <div className="flex justify-between items-center py-2 border-b border-gray-100">
-                    <span className="text-gray-600">Department:</span>
-                    <span className="font-semibold text-gray-900">{foundEmployee.department}</span>
-                  </div>
-
-                  <div className="flex justify-between items-center py-2">
-                    <span className="text-gray-600">Action:</span>
-                    <span className="px-3 py-1 rounded-full text-sm text-white" style={{ backgroundColor: "#32AD32" }}>
-                      {action}
-                    </span>
-                  </div>
-                </div>
-              </div>
-
+              <div className="text-2xl font-semibold mb-2" style={{ color: "#32AD32" }}>Saved Successfully!</div>
+              <p className="text-gray-600 mb-6">{successMsg}</p>
               <button
                 onClick={handleReset}
-                className="mt-6 px-6 py-2 border border-gray-300 rounded-lg text-gray-600 hover:bg-gray-50 transition-colors text-sm"
+                className="px-6 py-2 border border-gray-300 rounded-lg text-gray-600 hover:bg-gray-50 transition-colors text-sm"
               >
                 Record Another
               </button>
@@ -185,4 +257,6 @@ export function TimeInOut() {
     </div>
   );
 }
+
+const KIOSK_API = "http://localhost:5000/api/kiosk";
 

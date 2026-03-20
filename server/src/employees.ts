@@ -1,49 +1,106 @@
-import fs from 'fs';
-import path from 'path';
-
-const DATA_DIR = './data';
-const EMPLOYEES_FILE = path.join(DATA_DIR, 'employees.json');
+import { query, execute } from './db.js';
 
 export interface Employee {
-  id: string;
+  id: number;
   name: string;
   role: string;
-  profilePicture: string; // base64 data URL or empty string
+  picture: string | null;
+  status: string;
 }
 
-const defaultEmployees: Employee[] = [
-  { id: 'EMP001', name: 'John Smith', role: 'Engineer', profilePicture: '' },
-  { id: 'EMP002', name: 'Sarah Johnson', role: 'HR Manager', profilePicture: '' },
-  { id: 'EMP003', name: 'Michael Chen', role: 'Sales Representative', profilePicture: '' },
-  { id: 'EMP004', name: 'Emily Williams', role: 'Engineer', profilePicture: '' },
-  { id: 'EMP005', name: 'David Brown', role: 'Marketing Specialist', profilePicture: '' },
-  { id: 'EMP006', name: 'Jessica Davis', role: 'Finance Analyst', profilePicture: '' },
-  { id: 'EMP007', name: 'Robert Wilson', role: 'Operations Manager', profilePicture: '' },
-  { id: 'EMP008', name: 'Amanda Martinez', role: 'Engineer', profilePicture: '' },
-];
+export const getAllEmployees = async (): Promise<Employee[]> => {
+  const rows = await query<any>(
+    'SELECT EMPLOYEE_ID, NAME, ROLE, PICTURE, STATUS FROM EMPLOYEES ORDER BY NAME'
+  );
+  return rows.map((r) => ({
+    id: r.employee_id,
+    name: r.name ?? '',
+    role: r.role ?? '',
+    picture: r.picture ?? null,
+    status: r.status ?? 'ACTIVE',
+  }));
+};
 
-if (!fs.existsSync(DATA_DIR)) {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
-}
+export const getEmployeeById = async (id: number): Promise<Employee | null> => {
+  const rows = await query<any>(
+    'SELECT EMPLOYEE_ID, NAME, ROLE, PICTURE, STATUS FROM EMPLOYEES WHERE EMPLOYEE_ID = ?',
+    [id]
+  );
+  if (!rows.length) return null;
+  const r = rows[0];
+  return {
+    id: r.employee_id,
+    name: r.name ?? '',
+    role: r.role ?? '',
+    picture: r.picture ?? null,
+    status: r.status ?? 'ACTIVE',
+  };
+};
 
-export const loadEmployees = (): Employee[] => {
-  try {
-    if (fs.existsSync(EMPLOYEES_FILE)) {
-      const data = fs.readFileSync(EMPLOYEES_FILE, 'utf8');
-      return JSON.parse(data);
+const getNextAvailableEmployeeId = async (): Promise<number> => {
+  const rows = await query<any>(
+    'SELECT EMPLOYEE_ID FROM EMPLOYEES ORDER BY EMPLOYEE_ID'
+  );
+
+  let nextId = 1;
+  for (const row of rows) {
+    const currentId = Number(row.employee_id);
+    if (currentId > nextId) {
+      break;
     }
-  } catch (error) {
-    console.error('Error loading employees:', error);
+    if (currentId === nextId) {
+      nextId += 1;
+    }
   }
-  // First run: seed with defaults
-  saveEmployees(defaultEmployees);
-  return defaultEmployees;
+
+  return nextId;
 };
 
-export const saveEmployees = (employees: Employee[]): void => {
-  try {
-    fs.writeFileSync(EMPLOYEES_FILE, JSON.stringify(employees, null, 2));
-  } catch (error) {
-    console.error('Error saving employees:', error);
-  }
+export const createEmployee = async (data: {
+  name: string;
+  role?: string;
+}): Promise<Employee> => {
+  const newId = await getNextAvailableEmployeeId();
+  await execute(
+    'INSERT INTO EMPLOYEES (EMPLOYEE_ID, NAME, ROLE, STATUS) VALUES (?, ?, ?, ?)',
+    [newId, data.name, data.role ?? null, 'ACTIVE']
+  );
+  return {
+    id: newId,
+    name: data.name,
+    role: data.role ?? '',
+    picture: null,
+    status: 'ACTIVE',
+  };
 };
+
+export const updateEmployee = async (
+  id: number,
+  data: Partial<{ name: string; role: string; picture: string | null }>
+): Promise<Employee | null> => {
+  const existing = await getEmployeeById(id);
+  if (!existing) return null;
+  const updated = {
+    name: data.name ?? existing.name,
+    role: data.role ?? existing.role,
+    picture: data.picture !== undefined ? data.picture : existing.picture,
+  };
+  await execute(
+    'UPDATE EMPLOYEES SET NAME = ?, ROLE = ?, PICTURE = ? WHERE EMPLOYEE_ID = ?',
+    [updated.name, updated.role || null, updated.picture || null, id]
+  );
+  return { ...existing, ...updated };
+};
+
+export const deleteEmployee = async (id: number): Promise<boolean> => {
+  const existing = await getEmployeeById(id);
+  if (!existing) return false;
+
+  await execute('DELETE FROM ATTENDANCE_LOGS WHERE EMPLOYEE_ID = ?', [id]);
+  await execute('DELETE FROM ADMIN_CREDENTIALS WHERE EMPLOYEE_ID = ?', [id]);
+  await execute('DELETE FROM ADMINS WHERE EMPLOYEE_ID = ?', [id]);
+  await execute('DELETE FROM EMPLOYEES WHERE EMPLOYEE_ID = ?', [id]);
+
+  return true;
+};
+

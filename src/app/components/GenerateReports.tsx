@@ -1,46 +1,95 @@
 import { useState } from "react";
 import { Calendar, Download, FileText } from "lucide-react";
-import { attendanceRecords } from "../data/mockData";
+
+const API = "http://localhost:5000/api";
+
+function getAuthHeaders(): Record<string, string> {
+  const token = localStorage.getItem("authToken");
+  return { "Content-Type": "application/json", Authorization: `Bearer ${token}` };
+}
+
+interface AttendanceLog {
+  logId: number;
+  employeeId: number;
+  employeeName: string;
+  date: string;
+  timeIn: string | null;
+  timeOut: string | null;
+  status: string;
+  isLate: boolean;
+  location: string | null;
+  site: string | null;
+}
 
 export function GenerateReports() {
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
+  const [records, setRecords] = useState<AttendanceLog[]>([]);
   const [showPreview, setShowPreview] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [reportError, setReportError] = useState("");
 
-  const handleGenerateReport = () => {
+  const handleGenerateReport = async () => {
     if (!startDate || !endDate) {
-      alert("Please select both start and end dates");
+      setReportError("Please select both start and end dates");
       return;
     }
-    setShowPreview(true);
+    setReportError("");
+    setLoading(true);
+    try {
+      const res = await fetch(`${API}/attendance`, { headers: getAuthHeaders() });
+      if (!res.ok) throw new Error("Failed to fetch attendance data");
+      const all: AttendanceLog[] = await res.json();
+      const filtered = all.filter((r) => {
+        return r.date >= startDate && r.date <= endDate;
+      });
+      setRecords(filtered);
+      setShowPreview(true);
+    } catch (err: any) {
+      setReportError(err.message);
+    } finally {
+      setLoading(false);
+    }
   };
 
-  const filteredRecords = attendanceRecords.filter((record) => {
-    const recordDate = new Date(record.date);
-    const start = startDate ? new Date(startDate) : null;
-    const end = endDate ? new Date(endDate) : null;
+  const handleExportCSV = () => {
+    const header = ["Employee Name", "Employee ID", "Date", "Time In", "Time Out", "Location", "Site", "Status"];
+    const rows = records.map((r) => [
+      r.employeeName,
+      r.employeeId,
+      // Format as "Mar 20, 2026" — prevents Excel from auto-converting to a date cell
+      r.date ? new Date(r.date + "T00:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : "",
+      r.timeIn ?? "",
+      r.timeOut ?? "",
+      r.location ?? "",
+      r.site ?? "",
+      r.status,
+    ]);
+    const csv = [header, ...rows].map((row) => row.map((v) => `"${v}"`).join(",")).join("\n");
+    // UTF-8 BOM ensures Excel opens the file with correct encoding
+    const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `attendance_${startDate}_to_${endDate}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
 
-    const matchesDateRange =
-      (!start || recordDate >= start) && (!end || recordDate <= end);
-
-    return matchesDateRange;
-  });
-
-  const handleExport = (format: string) => {
-    alert(`Exporting report as ${format}...`);
+  const handleExportPrint = () => {
+    window.print();
   };
 
   const getStatusColor = (status: string) => {
-    switch (status) {
-      case "Present":
-        return "#32AD32";
-      case "Late":
-        return "#FFA500";
-      case "Absent":
-        return "#DC2626";
-      default:
-        return "#6B7280";
-    }
+    const s = status.toUpperCase();
+    if (s === "PRESENT") return "#32AD32";
+    if (s === "LATE") return "#F59E0B";
+    if (s === "HALF DAY") return "#F97316";
+    if (s === "UNDERTIME") return "#F97316";
+    if (s === "ABSENT") return "#DC2626";
+    if (s === "CLOCKED IN") return "#2563EB";
+    if (s.startsWith("OVERTIME")) return "#7C3AED";
+    return "#6B7280";
   };
 
   return (
@@ -90,22 +139,24 @@ export function GenerateReports() {
           <div className="flex gap-3">
             <button
               onClick={handleGenerateReport}
-              className="px-6 py-2 text-white rounded-lg transition-colors hover:opacity-90 flex items-center gap-2"
+              disabled={loading}
+              className="px-6 py-2 text-white rounded-lg transition-colors hover:opacity-90 flex items-center gap-2 disabled:opacity-50"
               style={{ backgroundColor: "#32AD32" }}
             >
               <FileText className="w-4 h-4" />
-              Generate Report
+              {loading ? "Loading..." : "Generate Report"}
             </button>
 
             {showPreview && (
               <button
-                onClick={() => setShowPreview(false)}
+                onClick={() => { setShowPreview(false); setRecords([]); }}
                 className="px-6 py-2 text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 transition-colors"
               >
                 Clear Preview
               </button>
             )}
           </div>
+          {reportError && <p className="mt-3 text-sm text-red-600">{reportError}</p>}
         </div>
 
         {/* Report Preview */}
@@ -125,20 +176,20 @@ export function GenerateReports() {
 
               <div className="flex gap-2">
                 <button
-                  onClick={() => handleExport("PDF")}
+                  onClick={handleExportCSV}
                   className="px-4 py-2 text-white rounded-lg transition-colors hover:opacity-90 flex items-center gap-2 text-sm"
                   style={{ backgroundColor: "#32AD32" }}
                 >
                   <Download className="w-4 h-4" />
-                  Export PDF
+                  Export CSV
                 </button>
                 <button
-                  onClick={() => handleExport("Excel")}
+                  onClick={handleExportPrint}
                   className="px-4 py-2 text-white rounded-lg transition-colors hover:opacity-90 flex items-center gap-2 text-sm"
                   style={{ backgroundColor: "#32AD32" }}
                 >
                   <Download className="w-4 h-4" />
-                  Export Excel
+                  Print / PDF
                 </button>
               </div>
             </div>
@@ -163,40 +214,33 @@ export function GenerateReports() {
                       Time Out
                     </th>
                     <th className="px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">
+                      Location
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">
+                      Site
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">
                       Status
                     </th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-200">
-                  {filteredRecords.length > 0 ? (
-                    filteredRecords.map((record) => (
-                      <tr key={record.id} className="hover:bg-gray-50">
-                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                          {record.employeeName}
-                        </td>
+                  {records.length > 0 ? (
+                    records.map((record) => (
+                      <tr key={record.logId} className="hover:bg-gray-50">
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{record.employeeName || "—"}</td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">{record.employeeId}</td>
                         <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">
-                          {record.employeeId}
+                          {new Date(record.date).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
                         </td>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">
-                          {new Date(record.date).toLocaleDateString("en-US", {
-                            month: "short",
-                            day: "numeric",
-                            year: "numeric",
-                          })}
+                        <td className="px-6 py-4 whitespace-nowrap text-sm font-medium" style={{ color: record.isLate ? "#DC2626" : undefined }}>
+                          {record.timeIn || <span className="text-gray-400 italic font-normal">—</span>}
                         </td>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                          {record.timeIn}
-                        </td>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                          {record.timeOut || (
-                            <span className="text-gray-400 italic">Not yet</span>
-                          )}
-                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{record.timeOut || <span className="text-gray-400 italic">Not yet</span>}</td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">{record.location || "—"}</td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">{record.site || "—"}</td>
                         <td className="px-6 py-4 whitespace-nowrap">
-                          <span
-                            className="px-3 py-1 inline-flex text-xs leading-5 font-semibold rounded-full text-white"
-                            style={{ backgroundColor: getStatusColor(record.status) }}
-                          >
+                          <span className="px-3 py-1 inline-flex text-xs leading-5 font-semibold rounded-full text-white" style={{ backgroundColor: getStatusColor(record.status) }}>
                             {record.status}
                           </span>
                         </td>
@@ -204,7 +248,7 @@ export function GenerateReports() {
                     ))
                   ) : (
                     <tr>
-                      <td colSpan={6} className="px-6 py-12 text-center text-gray-500">
+                      <td colSpan={8} className="px-6 py-12 text-center text-gray-500">
                         No records found for the selected date range
                       </td>
                     </tr>
@@ -213,9 +257,9 @@ export function GenerateReports() {
               </table>
             </div>
 
-            {filteredRecords.length > 0 && (
+            {records.length > 0 && (
               <div className="px-6 py-4 bg-gray-50 border-t border-gray-200 text-sm text-gray-600">
-                Total Records: {filteredRecords.length}
+                Total Records: {records.length}
               </div>
             )}
           </div>

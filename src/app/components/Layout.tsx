@@ -3,10 +3,11 @@ import { Outlet, Link, useLocation } from "react-router";
 import { Clock, Search, FileText, LogOut, User, Users } from "lucide-react";
 
 interface EmployeeProfile {
-  id: string;
+  id: number;
   name: string;
   role: string;
-  profilePicture: string;
+  picture: string | null;
+  status: string;
 }
 
 export function Layout() {
@@ -23,21 +24,30 @@ export function Layout() {
   }, []);
 
   useEffect(() => {
-    const employeeId = localStorage.getItem("employeeId");
-    const token = localStorage.getItem("authToken");
-    if (!employeeId || !token) return;
+    const loadProfile = () => {
+      const employeeId = localStorage.getItem("employeeId");
+      const token = localStorage.getItem("authToken");
+      if (!employeeId || !token) return;
 
-    fetch("http://localhost:5000/api/employees", {
-      headers: { Authorization: `Bearer ${token}` },
-    })
-      .then((r) => r.json())
-      .then((employees: EmployeeProfile[]) => {
-        const found = employees.find(
-          (e) => e.id.toString() === employeeId.toString()
-        );
-        if (found) setProfile(found);
+      fetch("http://localhost:5000/api/employees", {
+        headers: { Authorization: `Bearer ${token}` },
       })
-      .catch(() => {});
+        .then((r) => r.json())
+        .then((employees: EmployeeProfile[]) => {
+          const found = employees.find(
+            (employee) => employee.id.toString() === employeeId.toString()
+          );
+          if (found) setProfile(found);
+        })
+        .catch(() => {});
+    };
+
+    loadProfile();
+    window.addEventListener("profile-updated", loadProfile);
+
+    return () => {
+      window.removeEventListener("profile-updated", loadProfile);
+    };
   }, []);
 
   const formatDate = (date: Date) => {
@@ -134,9 +144,9 @@ export function Layout() {
                 onMouseEnter={() => setTooltipVisible(true)}
                 onMouseLeave={() => setTooltipVisible(false)}
               >
-                {profile?.profilePicture ? (
+                {profile?.picture ? (
                   <img
-                    src={profile.profilePicture}
+                    src={profile.picture}
                     alt={profile.name}
                     className="w-10 h-10 rounded-full object-cover border-2"
                     style={{ borderColor: "#32AD32" }}

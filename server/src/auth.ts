@@ -1,43 +1,7 @@
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
-import fs from 'fs';
-import path from 'path';
 import { config } from './config.js';
-
-const DATA_DIR = './data';
-const CREDS_FILE = path.join(DATA_DIR, 'credentials.json');
-
-// Ensure data directory exists
-if (!fs.existsSync(DATA_DIR)) {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
-}
-
-// Sample employees (in real app, these come from Firebird)
-const EMPLOYEES = [
-  { id: 1, name: 'John Admin', email: 'admin@company.com', department: 'IT' },
-  { id: 101, name: 'Jane Employee', email: 'jane@company.com', department: 'Sales' },
-  { id: 102, name: 'Bob Employee', email: 'bob@company.com', department: 'HR' },
-];
-
-const loadCredentials = (): Record<string, string> => {
-  try {
-    if (fs.existsSync(CREDS_FILE)) {
-      const data = fs.readFileSync(CREDS_FILE, 'utf8');
-      return JSON.parse(data);
-    }
-  } catch (error) {
-    console.error('Error loading credentials:', error);
-  }
-  return {};
-};
-
-const saveCredentials = (creds: Record<string, string>): void => {
-  try {
-    fs.writeFileSync(CREDS_FILE, JSON.stringify(creds, null, 2));
-  } catch (error) {
-    console.error('Error saving credentials:', error);
-  }
-};
+import { query, execute } from './db.js';
 
 export const hashPassword = async (password: string): Promise<string> => {
   const salt = await bcrypt.genSalt(10);
@@ -48,48 +12,111 @@ export const verifyPassword = async (password: string, hash: string): Promise<bo
   return bcrypt.compare(password, hash);
 };
 
-export const generateToken = (employeeId: string | number): string => {
+export const verifyAdminPassword = async (
+  employeeId: number,
+  password: string
+): Promise<boolean> => {
+  const credRows = await query<any>(
+    'SELECT PASSWORD_HASH FROM ADMIN_CREDENTIALS WHERE EMPLOYEE_ID = ?',
+    [employeeId]
+  );
+
+  if (!credRows.length) {
+    return false;
+  }
+
+  return verifyPassword(password, credRows[0].password_hash);
+};
+
+export const generateToken = (employeeId: number): string => {
   return jwt.sign({ employeeId }, config.JWT_SECRET, { expiresIn: config.JWT_EXPIRY });
 };
 
 export const verifyToken = (token: string): any => {
   try {
     return jwt.verify(token, config.JWT_SECRET);
-  } catch (err) {
+  } catch {
     return null;
   }
 };
 
 export const signup = async (
-  employeeId: string,
+  employeeIdStr: string,
   password: string
 ): Promise<{ success: boolean; message: string; token?: string }> => {
+  const employeeId = parseInt(employeeIdStr, 10);
+  if (isNaN(employeeId)) return { success: false, message: 'Invalid employee ID' };
+
   try {
-    // Check if employee exists
-    const employee = EMPLOYEES.find(e => e.id.toString() === employeeId);
-    if (!employee) {
-      return { success: false, message: 'Employee ID does not exist in the system' };
+    const empRows = await query<any>(
+      'SELECT EMPLOYEE_ID, ROLE FROM EMPLOYEES WHERE EMPLOYEE_ID = ?',
+      [employeeId]
+    );
+
+    if (!empRows.length) {
+      const [bootstrapRow] = await query<any>(
+        'SELECT COUNT(*) AS ADMIN_COUNT FROM ADMIN_CREDENTIALS'
+      );
+
+      const adminCount = Number(bootstrapRow?.admin_count ?? 0);
+      if (adminCount > 0) {
+        return {
+          success: false,
+          message: 'Only existing admin employees can sign up.',
+        };
+      }
+
+      await execute(
+        'INSERT INTO EMPLOYEES (EMPLOYEE_ID, NAME, ROLE, STATUS) VALUES (?, ?, ?, ?)',
+        [employeeId, '', 'ADMIN', 'ACTIVE']
+      );
+    } else {
+      const role = String(empRows[0].role ?? '').toUpperCase();
+      if (role !== 'ADMIN') {
+        return {
+          success: false,
+          message: 'Access denied. Only employees with ADMIN role can sign up.',
+        };
+      }
     }
 
-    // Check if already has account
-    const credentials = loadCredentials();
-    if (credentials[employeeId]) {
+    // Check if already has credentials
+    const credRows = await query<any>(
+      'SELECT CREDENTIAL_ID FROM ADMIN_CREDENTIALS WHERE EMPLOYEE_ID = ?',
+      [employeeId]
+    );
+    if (credRows.length) {
       return { success: false, message: 'This employee already has an account' };
     }
 
-    // Hash and store password
     const hashedPassword = await hashPassword(password);
-    credentials[employeeId] = hashedPassword;
-    saveCredentials(credentials);
 
-    // Generate token
+    // Insert into ADMINS if not already there
+    const adminRows = await query<any>(
+      'SELECT ADMIN_ID FROM ADMINS WHERE EMPLOYEE_ID = ?',
+      [employeeId]
+    );
+    if (!adminRows.length) {
+      const [adminIdRow] = await query<any>(
+        'SELECT COALESCE(MAX(ADMIN_ID), 0) + 1 AS NEW_ID FROM ADMINS'
+      );
+      await execute(
+        'INSERT INTO ADMINS (ADMIN_ID, EMPLOYEE_ID) VALUES (?, ?)',
+        [adminIdRow.new_id, employeeId]
+      );
+    }
+
+    // Insert credentials
+    const [credIdRow] = await query<any>(
+      'SELECT COALESCE(MAX(CREDENTIAL_ID), 0) + 1 AS NEW_ID FROM ADMIN_CREDENTIALS'
+    );
+    await execute(
+      'INSERT INTO ADMIN_CREDENTIALS (CREDENTIAL_ID, EMPLOYEE_ID, PASSWORD_HASH) VALUES (?, ?, ?)',
+      [credIdRow.new_id, employeeId, hashedPassword]
+    );
+
     const token = generateToken(employeeId);
-
-    return {
-      success: true,
-      message: 'Account created successfully',
-      token,
-    };
+    return { success: true, message: 'Account created successfully', token };
   } catch (error: any) {
     console.error('Signup error:', error);
     return { success: false, message: error.message || 'Signup failed' };
@@ -97,37 +124,44 @@ export const signup = async (
 };
 
 export const login = async (
-  employeeId: string,
+  employeeIdStr: string,
   password: string
 ): Promise<{ success: boolean; message: string; token?: string }> => {
+  const employeeId = parseInt(employeeIdStr, 10);
+  if (isNaN(employeeId)) return { success: false, message: 'Invalid employee ID' };
+
   try {
-    // Check if employee exists
-    const employee = EMPLOYEES.find(e => e.id.toString() === employeeId);
-    if (!employee) {
-      return { success: false, message: 'Invalid employee ID' };
+    // Verify employee exists
+    const empRows = await query<any>(
+      'SELECT EMPLOYEE_ID, ROLE FROM EMPLOYEES WHERE EMPLOYEE_ID = ?',
+      [employeeId]
+    );
+    if (!empRows.length) return { success: false, message: 'Invalid employee ID' };
+
+    const employee = empRows[0];
+    const adminRows = await query<any>(
+      'SELECT ADMIN_ID FROM ADMINS WHERE EMPLOYEE_ID = ?',
+      [employeeId]
+    );
+    const role = String(employee.role ?? '').toUpperCase();
+    if (!adminRows.length || role !== 'ADMIN') {
+      return { success: false, message: 'Access denied. Admin accounts only.' };
     }
 
-    // Check credentials
-    const credentials = loadCredentials();
-    const hashedPassword = credentials[employeeId];
-
-    if (!hashedPassword) {
+    // Fetch credentials
+    const credRows = await query<any>(
+      'SELECT PASSWORD_HASH FROM ADMIN_CREDENTIALS WHERE EMPLOYEE_ID = ?',
+      [employeeId]
+    );
+    if (!credRows.length) {
       return { success: false, message: 'Account not found. Please sign up first.' };
     }
 
-    const passwordMatch = await verifyPassword(password, hashedPassword);
-    if (!passwordMatch) {
-      return { success: false, message: 'Invalid password' };
-    }
+    const passwordMatch = await verifyPassword(password, credRows[0].password_hash);
+    if (!passwordMatch) return { success: false, message: 'Invalid password' };
 
-    // Generate token
     const token = generateToken(employeeId);
-
-    return {
-      success: true,
-      message: 'Login successful',
-      token,
-    };
+    return { success: true, message: 'Login successful', token };
   } catch (error: any) {
     console.error('Login error:', error);
     return { success: false, message: error.message || 'Login failed' };

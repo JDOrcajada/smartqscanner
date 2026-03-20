@@ -14,7 +14,7 @@ export const config = {
   // Firebird Database config
   DB_HOST: process.env.DB_HOST || 'localhost',
   DB_PORT: process.env.DB_PORT || 3050,
-  DB_DATABASE: process.env.DB_DATABASE || 'C:/Users/JD/Documents/smartqweb/database/attendance.fdb',
+  DB_DATABASE: process.env.DB_DATABASE || 'C:/Users/JD/Documents/smartqproj/smartqweb/database/ATTENDANCE.FDB',
   DB_USER: process.env.DB_USER || 'SYSDBA',
   DB_PASSWORD: process.env.DB_PASSWORD || 'masterkey',
 

@@ -1,5 +1,6 @@
 import { Router, Request, Response } from 'express';
-import { loadEmployees, saveEmployees, Employee } from './employees.js';
+import { getAllEmployees, createEmployee, updateEmployee, deleteEmployee } from './employees.js';
+import { verifyAdminPassword } from './auth.js';
 import { authenticate } from './middleware.js';
 
 const employeeRouter = Router();
@@ -8,76 +9,72 @@ const employeeRouter = Router();
 employeeRouter.use(authenticate);
 
 // GET /api/employees — list all
-employeeRouter.get('/', (req: Request, res: Response) => {
-  const employees = loadEmployees();
-  return res.json(employees);
+employeeRouter.get('/', async (_req: Request, res: Response) => {
+  try {
+    return res.json(await getAllEmployees());
+  } catch (err: any) {
+    return res.status(500).json({ message: err.message });
+  }
 });
 
 // POST /api/employees — create new
-employeeRouter.post('/', (req: Request, res: Response) => {
-  const { id, name, role, profilePicture } = req.body;
-
-  if (!id || !name || !role) {
-    return res.status(400).json({ message: 'ID, name, and role are required' });
+employeeRouter.post('/', async (req: Request, res: Response) => {
+  const { name, role } = req.body;
+  if (!name?.trim()) {
+    return res.status(400).json({ message: 'Name is required' });
   }
-
-  const employees = loadEmployees();
-
-  if (employees.find((e) => e.id === id.trim())) {
-    return res.status(400).json({ message: 'Employee ID already exists' });
+  try {
+    const employee = await createEmployee({
+      name: name.trim(),
+      role: role?.trim(),
+    });
+    return res.status(201).json(employee);
+  } catch (err: any) {
+    return res.status(500).json({ message: err.message });
   }
-
-  const newEmployee: Employee = {
-    id: id.trim(),
-    name: name.trim(),
-    role: role.trim(),
-    profilePicture: profilePicture || '',
-  };
-
-  employees.push(newEmployee);
-  saveEmployees(employees);
-
-  return res.status(201).json(newEmployee);
 });
 
 // PUT /api/employees/:id — update existing
-employeeRouter.put('/:id', (req: Request, res: Response) => {
-  const { id } = req.params;
-  const { name, role, profilePicture } = req.body;
-
-  const employees = loadEmployees();
-  const idx = employees.findIndex((e) => e.id === id);
-
-  if (idx === -1) {
-    return res.status(404).json({ message: 'Employee not found' });
+employeeRouter.put('/:id', async (req: Request, res: Response) => {
+  const id = parseInt(req.params.id, 10);
+  if (isNaN(id)) return res.status(400).json({ message: 'Invalid employee ID' });
+  const { name, role, picture } = req.body;
+  try {
+    const employee = await updateEmployee(id, {
+      name: name?.trim(),
+      role: role?.trim(),
+      picture: picture !== undefined ? picture : undefined,
+    });
+    if (!employee) return res.status(404).json({ message: 'Employee not found' });
+    return res.json(employee);
+  } catch (err: any) {
+    return res.status(500).json({ message: err.message });
   }
-
-  employees[idx] = {
-    ...employees[idx],
-    ...(name !== undefined && { name: name.trim() }),
-    ...(role !== undefined && { role: role.trim() }),
-    ...(profilePicture !== undefined && { profilePicture }),
-  };
-
-  saveEmployees(employees);
-  return res.json(employees[idx]);
 });
 
-// DELETE /api/employees/:id — remove
-employeeRouter.delete('/:id', (req: Request, res: Response) => {
-  const { id } = req.params;
+// DELETE /api/employees/:id — permanent delete with admin password confirmation
+employeeRouter.delete('/:id', async (req: Request, res: Response) => {
+  const id = parseInt(req.params.id, 10);
+  if (isNaN(id)) return res.status(400).json({ message: 'Invalid employee ID' });
 
-  const employees = loadEmployees();
-  const idx = employees.findIndex((e) => e.id === id);
-
-  if (idx === -1) {
-    return res.status(404).json({ message: 'Employee not found' });
+  const { password } = req.body ?? {};
+  if (!password?.trim()) {
+    return res.status(400).json({ message: 'Admin password is required' });
   }
 
-  employees.splice(idx, 1);
-  saveEmployees(employees);
+  try {
+    const adminEmployeeId = Number((req as any).user?.employeeId);
+    const passwordValid = await verifyAdminPassword(adminEmployeeId, password);
+    if (!passwordValid) {
+      return res.status(403).json({ message: 'Invalid admin password' });
+    }
 
-  return res.json({ message: 'Employee deleted successfully' });
+    const deleted = await deleteEmployee(id);
+    if (!deleted) return res.status(404).json({ message: 'Employee not found' });
+    return res.json({ message: 'Employee deleted successfully' });
+  } catch (err: any) {
+    return res.status(500).json({ message: err.message });
+  }
 });
 
 export default employeeRouter;
