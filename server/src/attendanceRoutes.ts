@@ -1,5 +1,6 @@
 import { Router, Request, Response } from 'express';
-import { query, execute } from './db.js';
+import { query, execute, getNextAvailableId } from './db.js';
+import { parseEmployeeId } from './employeeId.js';
 import { authenticate } from './middleware.js';
 
 const attendanceRouter = Router();
@@ -120,8 +121,8 @@ attendanceRouter.get('/', async (_req: Request, res: Response) => {
 // Body: { employeeId, date (YYYY-MM-DD), timeIn (HH:MM), timeOut? (HH:MM), location?, site?, status? }
 attendanceRouter.post('/admin', async (req: Request, res: Response) => {
   const { employeeId, date, timeIn, timeOut, location, site, status } = req.body;
-  const id = parseInt(String(employeeId), 10);
-  if (isNaN(id)) return res.status(400).json({ message: 'Invalid employee ID' });
+  const id = parseEmployeeId(employeeId);
+  if (id === null) return res.status(400).json({ message: 'Invalid employee ID' });
   if (!date || !timeIn) return res.status(400).json({ message: 'date and timeIn are required' });
 
   const timeInTs = new Date(`${date}T${timeIn}:00`);
@@ -144,12 +145,10 @@ attendanceRouter.post('/admin', async (req: Request, res: Response) => {
       );
       return res.json({ message: 'Attendance record updated', action: 'updated' });
     } else {
-      const [idRow] = await query<any>(
-        'SELECT COALESCE(MAX(LOG_ID), 0) + 1 AS NEW_ID FROM ATTENDANCE_LOGS'
-      );
+      const logId = await getNextAvailableId('ATTENDANCE_LOGS', 'LOG_ID');
       await execute(
         'INSERT INTO ATTENDANCE_LOGS (LOG_ID, EMPLOYEE_ID, TIME_IN, TIME_OUT, DATE_LOG, LOCATION, SITE, STATUS, CREATED_AT, UPDATED_AT) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-        [idRow.new_id, id, timeInTs, timeOutTs, date, loc, siteName, statusOverride, now, now]
+        [logId, id, timeInTs, timeOutTs, date, loc, siteName, statusOverride, now, now]
       );
       return res.json({ message: 'Attendance record created', action: 'created' });
     }

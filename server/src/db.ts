@@ -72,4 +72,42 @@ export const execute = (sql: string, params: any[] = []): Promise<void> =>
     });
   });
 
+const assertIdentifier = (value: string): string => {
+  if (!/^[A-Z_][A-Z0-9_]*$/i.test(value)) {
+    throw new Error(`Invalid SQL identifier: ${value}`);
+  }
+
+  return value;
+};
+
+export const getNextAvailableId = async (
+  tableName: string,
+  columnName: string
+): Promise<number> => {
+  const safeTableName = assertIdentifier(tableName);
+  const safeColumnName = assertIdentifier(columnName);
+
+  const rows = await query<any>(
+    `SELECT ${safeColumnName} FROM ${safeTableName} ORDER BY ${safeColumnName}`
+  );
+
+  let nextId = 1;
+  for (const row of rows) {
+    const currentId = Number(row[safeColumnName.toLowerCase()]);
+    if (!Number.isInteger(currentId) || currentId <= 0) {
+      continue;
+    }
+
+    if (currentId > nextId) {
+      break;
+    }
+
+    if (currentId === nextId) {
+      nextId += 1;
+    }
+  }
+
+  return nextId;
+};
+
 

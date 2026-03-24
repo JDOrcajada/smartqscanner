@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { Outlet, Link, useLocation } from "react-router";
 import { Clock, Search, FileText, LogOut, User, Users } from "lucide-react";
+import { API_BASE } from '../../imports/api';
 
 interface EmployeeProfile {
   id: number;
@@ -29,7 +30,7 @@ export function Layout() {
       const token = localStorage.getItem("authToken");
       if (!employeeId || !token) return;
 
-      fetch("http://localhost:5000/api/employees", {
+      fetch(`${API_BASE}/employees`, {
         headers: { Authorization: `Bearer ${token}` },
       })
         .then((r) => r.json())

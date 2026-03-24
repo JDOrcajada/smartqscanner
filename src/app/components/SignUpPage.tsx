@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router';
+import { API_BASE } from '../../imports/api';
 
 export default function SignUpPage() {
   const [employeeNumber, setEmployeeNumber] = useState('');
@@ -41,7 +42,7 @@ export default function SignUpPage() {
 
     setLoading(true);
     try {
-      const response = await fetch('http://localhost:5000/api/auth/signup', {
+      const response = await fetch(`${API_BASE}/auth/signup`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

@@ -1,7 +1,8 @@
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { config } from './config.js';
-import { query, execute } from './db.js';
+import { query, execute, getNextAvailableId } from './db.js';
+import { parseEmployeeId } from './employeeId.js';
 
 export const hashPassword = async (password: string): Promise<string> => {
   const salt = await bcrypt.genSalt(10);
@@ -44,8 +45,8 @@ export const signup = async (
   employeeIdStr: string,
   password: string
 ): Promise<{ success: boolean; message: string; token?: string }> => {
-  const employeeId = parseInt(employeeIdStr, 10);
-  if (isNaN(employeeId)) return { success: false, message: 'Invalid employee ID' };
+  const employeeId = parseEmployeeId(employeeIdStr);
+  if (employeeId === null) return { success: false, message: 'Invalid employee ID' };
 
   try {
     const empRows = await query<any>(
@@ -97,22 +98,18 @@ export const signup = async (
       [employeeId]
     );
     if (!adminRows.length) {
-      const [adminIdRow] = await query<any>(
-        'SELECT COALESCE(MAX(ADMIN_ID), 0) + 1 AS NEW_ID FROM ADMINS'
-      );
+      const adminId = await getNextAvailableId('ADMINS', 'ADMIN_ID');
       await execute(
         'INSERT INTO ADMINS (ADMIN_ID, EMPLOYEE_ID) VALUES (?, ?)',
-        [adminIdRow.new_id, employeeId]
+        [adminId, employeeId]
       );
     }
 
     // Insert credentials
-    const [credIdRow] = await query<any>(
-      'SELECT COALESCE(MAX(CREDENTIAL_ID), 0) + 1 AS NEW_ID FROM ADMIN_CREDENTIALS'
-    );
+    const credentialId = await getNextAvailableId('ADMIN_CREDENTIALS', 'CREDENTIAL_ID');
     await execute(
       'INSERT INTO ADMIN_CREDENTIALS (CREDENTIAL_ID, EMPLOYEE_ID, PASSWORD_HASH) VALUES (?, ?, ?)',
-      [credIdRow.new_id, employeeId, hashedPassword]
+      [credentialId, employeeId, hashedPassword]
     );
 
     const token = generateToken(employeeId);
@@ -127,8 +124,8 @@ export const login = async (
   employeeIdStr: string,
   password: string
 ): Promise<{ success: boolean; message: string; token?: string }> => {
-  const employeeId = parseInt(employeeIdStr, 10);
-  if (isNaN(employeeId)) return { success: false, message: 'Invalid employee ID' };
+  const employeeId = parseEmployeeId(employeeIdStr);
+  if (employeeId === null) return { success: false, message: 'Invalid employee ID' };
 
   try {
     // Verify employee exists

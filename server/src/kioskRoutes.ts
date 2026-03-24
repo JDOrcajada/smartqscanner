@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { getEmployeeById } from './employees.js';
-import { query, execute } from './db.js';
+import { query, execute, getNextAvailableId } from './db.js';
+import { parseEmployeeId } from './employeeId.js';
 
 const kioskRouter = Router();
 
@@ -8,8 +9,8 @@ const kioskRouter = Router();
 
 // GET /api/kiosk/employee/:id — look up employee for display on scan
 kioskRouter.get('/employee/:id', async (req: Request, res: Response) => {
-  const id = parseInt(req.params.id, 10);
-  if (isNaN(id)) {
+  const id = parseEmployeeId(req.params.id);
+  if (id === null) {
     return res.status(400).json({ message: 'Invalid employee ID' });
   }
   try {
@@ -30,9 +31,9 @@ kioskRouter.get('/employee/:id', async (req: Request, res: Response) => {
 // Body: { employeeId: number, action: 'IN' | 'OUT', location?: string, site?: string }
 kioskRouter.post('/attendance', async (req: Request, res: Response) => {
   const { employeeId, action, location, site } = req.body;
-  const id = parseInt(String(employeeId), 10);
+  const id = parseEmployeeId(employeeId);
 
-  if (isNaN(id)) {
+  if (id === null) {
     return res.status(400).json({ message: 'Invalid employee ID' });
   }
   if (action !== 'IN' && action !== 'OUT') {
@@ -86,12 +87,10 @@ kioskRouter.post('/attendance', async (req: Request, res: Response) => {
         );
       } else {
         // Insert new row — STATUS = NULL so it is computed dynamically
-        const [idRow] = await query<any>(
-          'SELECT COALESCE(MAX(LOG_ID), 0) + 1 AS NEW_ID FROM ATTENDANCE_LOGS'
-        );
+        const logId = await getNextAvailableId('ATTENDANCE_LOGS', 'LOG_ID');
         await execute(
           'INSERT INTO ATTENDANCE_LOGS (LOG_ID, EMPLOYEE_ID, TIME_IN, DATE_LOG, STATUS, LOCATION, SITE, CREATED_AT, UPDATED_AT) VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?)',
-          [idRow.new_id, id, now, today, loc, site ?? null, now, now]
+          [logId, id, now, today, loc, site ?? null, now, now]
         );
       }
       return res.json({ message: 'Clocked in successfully', time: now });

@@ -1,15 +1,18 @@
 import React, { useState, useEffect } from "react";
-import { Plus, Pencil, Trash2, X, AlertTriangle, User } from "lucide-react";
+import { Plus, Pencil, Trash2, X, AlertTriangle, User, QrCode, Printer } from "lucide-react";
+import QRCode from "qrcode";
+import { API_BASE } from '../../imports/api';
 
 interface Employee {
   id: number;
   name: string;
   role: string;
   picture: string | null;
+  qrCode: string | null;
   status: string;
 }
 
-const API = "http://localhost:5000/api";
+const API = API_BASE;
 
 function getAuthHeaders(): Record<string, string> {
   const token = localStorage.getItem("authToken");
@@ -31,6 +34,7 @@ export function EmployeeList() {
   const [showDeletePasswordConfirm, setShowDeletePasswordConfirm] = useState(false);
 
   // Form fields
+  const [formEmployeeId, setFormEmployeeId] = useState("");
   const [formName, setFormName] = useState("");
   const [formRole, setFormRole] = useState("");
   const [formError, setFormError] = useState("");
@@ -43,15 +47,21 @@ export function EmployeeList() {
 
   // Picture modal
   const [pictureModal, setPictureModal] = useState<Employee | null>(null);
+  const [qrModal, setQrModal] = useState<Employee | null>(null);
+  const [qrLoading, setQrLoading] = useState(false);
+  const [qrError, setQrError] = useState("");
 
   const selectedEmployee = employees.find((e) => e.id === selectedId) ?? null;
+  const isInsertFormIncomplete =
+    modalMode === "insert" &&
+    (!formEmployeeId.trim() || !formName.trim() || !formRole.trim());
 
   const fetchEmployees = async () => {
     setLoading(true);
     setPageError("");
     try {
       const res = await fetch(`${API}/employees`, { headers: getAuthHeaders() });
-      if (!res.ok) throw new Error("Failed to fetch employees");
+      if (!res.ok) throw new Error(res.status === 401 ? "Session expired — please log in again" : "Failed to fetch employees");
       setEmployees(await res.json());
     } catch (err: any) {
       setPageError(err.message);
@@ -65,6 +75,7 @@ export function EmployeeList() {
   }, []);
 
   const openInsert = () => {
+    setFormEmployeeId("");
     setFormName("");
     setFormRole("");
     setFormError("");
@@ -73,6 +84,7 @@ export function EmployeeList() {
 
   const openEdit = () => {
     if (!selectedEmployee) return;
+    setFormEmployeeId(String(selectedEmployee.id));
     setFormName(selectedEmployee.name);
     setFormRole(selectedEmployee.role);
     setFormError("");
@@ -81,6 +93,11 @@ export function EmployeeList() {
 
   const openPictureModal = (emp: Employee) => {
     setPictureModal(emp);
+  };
+
+  const openQrModal = (emp: Employee) => {
+    setQrError("");
+    setQrModal(emp);
   };
 
   const openDeleteConfirm = () => {
@@ -129,12 +146,132 @@ export function EmployeeList() {
     setPictureModal(null);
   };
 
+  const handleGenerateQr = async () => {
+    if (!selectedEmployee) {
+      return;
+    }
+
+    setQrLoading(true);
+    setQrError("");
+
+    try {
+      const qrCode = await QRCode.toDataURL(String(selectedEmployee.id), {
+        errorCorrectionLevel: "M",
+        margin: 2,
+        width: 512,
+        color: {
+          dark: "#111827",
+          light: "#FFFFFF",
+        },
+      });
+
+      const res = await fetch(`${API}/employees/${selectedEmployee.id}`, {
+        method: "PUT",
+        headers: getAuthHeaders(),
+        body: JSON.stringify({ qrCode }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.message || "Failed to generate QR code");
+      }
+
+      await fetchEmployees();
+      openQrModal({ ...selectedEmployee, qrCode: data.qrCode ?? qrCode });
+    } catch (err: any) {
+      setQrError(err.message || "Failed to generate QR code");
+    } finally {
+      setQrLoading(false);
+    }
+  };
+
+  const handlePrintQr = () => {
+    if (!qrModal?.qrCode) {
+      return;
+    }
+
+    const printWindow = window.open("", "_blank", "width=720,height=900");
+    if (!printWindow) {
+      setQrError("Popup blocked. Allow popups to print the QR code.");
+      return;
+    }
+
+    printWindow.document.write(`
+      <html>
+        <head>
+          <title>Print Employee QR</title>
+          <style>
+            body {
+              font-family: Arial, sans-serif;
+              display: flex;
+              align-items: center;
+              justify-content: center;
+              min-height: 100vh;
+              margin: 0;
+              background: #ffffff;
+            }
+            .sheet {
+              text-align: center;
+              padding: 32px;
+            }
+            img {
+              width: 320px;
+              height: 320px;
+              object-fit: contain;
+            }
+            h1 {
+              margin: 0 0 12px;
+              font-size: 28px;
+            }
+            p {
+              margin: 6px 0;
+              font-size: 18px;
+            }
+          </style>
+        </head>
+        <body>
+          <div class="sheet">
+            <h1>${qrModal.name}</h1>
+            <p>Employee ID: ${qrModal.id}</p>
+            <p>Role: ${qrModal.role || "-"}</p>
+            <img src="${qrModal.qrCode}" alt="Employee QR Code" />
+          </div>
+          <script>
+            window.onload = () => {
+              window.print();
+            };
+          <\/script>
+        </body>
+      </html>
+    `);
+    printWindow.document.close();
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+
+    const trimmedEmployeeId = formEmployeeId.trim();
+    const parsedEmployeeId = Number(trimmedEmployeeId);
+
+    if (!trimmedEmployeeId) {
+      setFormError("Employee ID is required.");
+      return;
+    }
+
+    if (!Number.isInteger(parsedEmployeeId) || parsedEmployeeId <= 0) {
+      setFormError("Employee ID must be a positive integer.");
+      return;
+    }
+
     if (!formName.trim()) {
       setFormError("Name is required.");
       return;
     }
+
+    if (modalMode === "insert" && !formRole.trim()) {
+      setFormError("Role is required when adding a new employee.");
+      return;
+    }
+
     setFormLoading(true);
     setFormError("");
     try {
@@ -143,6 +280,7 @@ export function EmployeeList() {
           method: "POST",
           headers: getAuthHeaders(),
           body: JSON.stringify({
+            employeeId: parsedEmployeeId,
             name: formName,
             role: formRole,
           }),
@@ -154,12 +292,22 @@ export function EmployeeList() {
           method: "PUT",
           headers: getAuthHeaders(),
           body: JSON.stringify({
+            employeeId: parsedEmployeeId,
             name: formName,
             role: formRole,
           }),
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.message);
+
+        const currentEmployeeId = localStorage.getItem("employeeId");
+        if (currentEmployeeId === String(selectedId) && data.id && data.id !== selectedId) {
+          localStorage.setItem("employeeId", String(data.id));
+          if (data.token) {
+            localStorage.setItem("authToken", data.token);
+          }
+          window.dispatchEvent(new Event("profile-updated"));
+        }
       }
       setModalMode(null);
       setSelectedId(null);
@@ -237,6 +385,16 @@ export function EmployeeList() {
               Delete
             </button>
 
+            <button
+              onClick={handleGenerateQr}
+              disabled={!selectedId || qrLoading}
+              className="flex items-center gap-2 px-4 py-2 text-sm text-white rounded-lg transition-colors hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed"
+              style={{ backgroundColor: "#7C3AED" }}
+            >
+              <QrCode className="w-4 h-4" />
+              {qrLoading ? "Generating..." : "Generate QR"}
+            </button>
+
             {selectedId && (
               <span className="ml-auto text-sm text-gray-500">
                 Selected:{" "}
@@ -251,6 +409,12 @@ export function EmployeeList() {
           {pageError && (
             <div className="mx-6 mt-4 px-4 py-3 rounded-lg bg-red-50 text-sm text-red-700 border border-red-200">
               {pageError}
+            </div>
+          )}
+
+          {qrError && (
+            <div className="mx-6 mt-4 px-4 py-3 rounded-lg bg-red-50 text-sm text-red-700 border border-red-200">
+              {qrError}
             </div>
           )}
 
@@ -275,6 +439,9 @@ export function EmployeeList() {
                       Photo
                     </th>
                     <th className="px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">
+                      QR Code
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">
                       Status
                     </th>
                   </tr>
@@ -283,7 +450,7 @@ export function EmployeeList() {
                   {employees.length === 0 ? (
                     <tr>
                       <td
-                        colSpan={5}
+                        colSpan={6}
                         className="px-6 py-12 text-center text-gray-400"
                       >
                         No employees found. Click Insert to add one.
@@ -327,6 +494,21 @@ export function EmployeeList() {
                               }
                             </button>
                           </td>
+                          <td className="px-6 py-3 text-sm text-gray-600">
+                            {emp.qrCode ? (
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  openQrModal(emp);
+                                }}
+                                className="focus:outline-none"
+                              >
+                                <img src={emp.qrCode} className="w-10 h-10 rounded object-cover border border-gray-200 bg-white" alt="QR code" />
+                              </button>
+                            ) : (
+                              <span className="text-gray-300 italic">—</span>
+                            )}
+                          </td>
                           <td className="px-6 py-3 text-sm">
                             <span
                               className="px-2 py-0.5 rounded-full text-xs font-medium"
@@ -365,6 +547,21 @@ export function EmployeeList() {
             </div>
 
             <form onSubmit={handleSubmit} className="px-6 py-5 space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Employee ID <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="number"
+                  min="1"
+                  step="1"
+                  value={formEmployeeId}
+                  onChange={(e) => setFormEmployeeId(e.target.value)}
+                  placeholder="e.g. 103"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-1"
+                />
+              </div>
+
               {/* Employee Name */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -382,7 +579,7 @@ export function EmployeeList() {
               {/* Role */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Role
+                  Role{modalMode === "insert" && <span className="text-red-500"> *</span>}
                 </label>
                 <input
                   type="text"
@@ -400,7 +597,7 @@ export function EmployeeList() {
               <div className="flex gap-3 pt-1">
                 <button
                   type="submit"
-                  disabled={formLoading}
+                  disabled={formLoading || isInsertFormIncomplete}
                   className="flex-1 py-2.5 text-sm text-white rounded-lg disabled:opacity-50 transition-colors hover:opacity-90"
                   style={{ backgroundColor: "#32AD32" }}
                 >
@@ -509,6 +706,50 @@ export function EmployeeList() {
               >
                 Back
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {qrModal && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-sm mx-4 p-6">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-semibold text-gray-900">Employee QR Code</h3>
+              <button onClick={() => setQrModal(null)} className="text-gray-400 hover:text-gray-600">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="flex flex-col items-center gap-4">
+              {qrModal.qrCode ? (
+                <img src={qrModal.qrCode} className="w-56 h-56 rounded-lg border border-gray-200 bg-white p-3" alt="Employee QR code" />
+              ) : (
+                <div className="w-56 h-56 rounded-lg border border-dashed border-gray-300 flex items-center justify-center text-sm text-gray-400">
+                  QR code not generated yet
+                </div>
+              )}
+              <div className="text-center">
+                <p className="text-base font-semibold text-gray-900">{qrModal.name}</p>
+                <p className="text-sm text-gray-600">Employee ID: {qrModal.id}</p>
+                <p className="text-sm text-gray-500">{qrModal.role || "-"}</p>
+              </div>
+              <div className="flex gap-3 w-full">
+                <button
+                  onClick={handlePrintQr}
+                  disabled={!qrModal.qrCode}
+                  className="flex-1 inline-flex items-center justify-center gap-2 px-4 py-2 text-sm text-white rounded-lg hover:opacity-90 transition-colors disabled:opacity-50"
+                  style={{ backgroundColor: "#2563EB" }}
+                >
+                  <Printer className="w-4 h-4" />
+                  Print
+                </button>
+                <button
+                  onClick={() => setQrModal(null)}
+                  className="flex-1 px-4 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
+                >
+                  Close
+                </button>
+              </div>
             </div>
           </div>
         </div>

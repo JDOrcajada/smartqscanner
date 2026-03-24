@@ -31,7 +31,17 @@ C:\Users\JD\Documents\smartqproj\
 | Kiosk app (`attendance-system/`) | **5174** | Run with `npm run dev` in `attendance-system/` |
 | Firebird DB | **3050** | localhost, SuperServer |
 
-**All API calls in all frontends hardcode `http://localhost:5000/api`.**
+Frontend API bases are now environment-driven, not hardcoded:
+
+- `smartqweb/src/imports/api.ts` uses `VITE_API_BASE_URL` with fallback `http://localhost:5000/api`
+- `attendance-system/src/imports/api.ts` uses `VITE_KIOSK_API_BASE_URL` or `VITE_API_BASE_URL`, with fallback `http://localhost:5000/api/kiosk`
+
+In development this still behaves like:
+
+- admin web → backend at `http://localhost:5000/api`
+- kiosk app → backend kiosk routes at `http://localhost:5000/api/kiosk`
+
+The still-pending production deployment work is to make the admin app run from a single backend-served port and to package the kiosk so it launches like a normal installed app.
 
 ---
 
@@ -75,24 +85,25 @@ The server prints `✓ Connected to Firebird database` on success.
 
 ```sql
 CREATE TABLE EMPLOYEES (
-    EMPLOYEE_ID INTEGER PRIMARY KEY,
+  EMPLOYEE_ID BIGINT PRIMARY KEY,
     NAME VARCHAR(255),                    -- NOT NULL was dropped
     ROLE VARCHAR(100),                    -- renamed from DEPARTMENT
     PICTURE BLOB SUB_TYPE TEXT,           -- added; stores base64 data URL
+  QR_CODE BLOB SUB_TYPE TEXT,           -- added; stores QR image data URL
     STATUS VARCHAR(20) DEFAULT 'ACTIVE',
     CREATED_AT TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE ADMINS (
     ADMIN_ID INTEGER PRIMARY KEY,
-    EMPLOYEE_ID INTEGER NOT NULL UNIQUE,
+  EMPLOYEE_ID BIGINT NOT NULL UNIQUE,
     CREATED_AT TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (EMPLOYEE_ID) REFERENCES EMPLOYEES(EMPLOYEE_ID)
 );
 
 CREATE TABLE ADMIN_CREDENTIALS (
     CREDENTIAL_ID INTEGER PRIMARY KEY,
-    EMPLOYEE_ID INTEGER NOT NULL UNIQUE,
+  EMPLOYEE_ID BIGINT NOT NULL UNIQUE,
     PASSWORD_HASH VARCHAR(255) NOT NULL,
     CREATED_AT TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     UPDATED_AT TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -101,7 +112,7 @@ CREATE TABLE ADMIN_CREDENTIALS (
 
 CREATE TABLE ATTENDANCE_LOGS (
     LOG_ID INTEGER PRIMARY KEY,
-    EMPLOYEE_ID INTEGER NOT NULL,
+  EMPLOYEE_ID BIGINT NOT NULL,
     TIME_IN TIMESTAMP,
     TIME_OUT TIMESTAMP,
     DATE_LOG DATE NOT NULL,
@@ -115,6 +126,8 @@ CREATE TABLE ATTENDANCE_LOGS (
 ```
 
 > NOTE: `EMAIL` and `DEPARTMENT` columns no longer exist on EMPLOYEES. Do not reference them.
+
+> NOTE: live schema and source schema are aligned for the current handoff state. The `BIGINT` employee ID migration and the `QR_CODE` column migration have already been applied to the live `ATTENDANCE.FDB` used during development.
 
 > CRITICAL: `STATUS` is **deliberately NULL** for all kiosk-written records. Status is computed dynamically at query time by `computeStatus()` in `attendanceRoutes.ts`. A non-null STATUS in the DB means an admin manually overrode it — do not overwrite it during computation.
 >
@@ -138,40 +151,59 @@ CREATE TABLE ATTENDANCE_LOGS (
 ### `db.ts`
 - Firebird connection **pool of 5** via `node-firebird`
 - `lowercase_keys: true` — all column names come back lowercase
-- Exports: `initializeDbPool()`, `query<T>(sql, params)`, `execute(sql, params)`
+- Exports: `initializeDbPool()`, `query<T>(sql, params)`, `execute(sql, params)`, `getNextAvailableId(table, column)`
 - Has `resolveBlobs()` — BLOB fields in node-firebird return as callback functions; this resolves them to UTF-8 strings before returning rows
+- `getNextAvailableId()` now fills the **lowest missing numeric gap** for manual integer-key tables instead of using `MAX(ID) + 1`
 
 ### `config.ts`
 - Reads from `.env`. Key defaults: `PORT=5000`, `DB_DATABASE=C:/Users/JD/Documents/smartqproj/smartqweb/database/ATTENDANCE.FDB`, `DB_USER=SYSDBA`, `DB_PASSWORD=masterkey`, `CORS_ORIGIN=http://localhost:5173`
 
 ### `auth.ts`
-- `signup(employeeIdStr, password)`: Creates EMPLOYEES row (blank name, ROLE='ADMIN', STATUS='ACTIVE') if not exists, then creates ADMINS + ADMIN_CREDENTIALS rows. Returns JWT.
-- `login(employeeIdStr, password)`: Verifies EMPLOYEES exists, checks ADMIN_CREDENTIALS, bcrypt compare, returns JWT.
+- `signup(employeeIdStr, password)`: Restricted to valid admin signup paths only.
+  - Existing EMPLOYEE_ID may sign up only if its EMPLOYEES.ROLE is already `ADMIN`
+  - First-account bootstrap is still allowed only when there are no rows yet in `ADMIN_CREDENTIALS`
+  - Creates ADMINS + ADMIN_CREDENTIALS rows and returns JWT
+- `login(employeeIdStr, password)`: Verifies EMPLOYEES exists, requires both `ROLE='ADMIN'` and an ADMINS row, checks ADMIN_CREDENTIALS, returns JWT.
+- `verifyAdminPassword(employeeId, password)`: Used by destructive employee delete flow to require second-factor confirmation from the logged-in admin
+- Uses shared numeric parsing from `employeeId.ts` so large IDs are accepted safely as long as they are positive safe integers
+
+### `employeeId.ts`
+- Central employee ID parsing helper
+- `parseEmployeeId(value)` accepts digit-only positive IDs and rejects invalid/non-safe-integer values
+- `normalizeEmployeeId(value)` truncates a provided numeric value for controlled updates/inserts
 
 ### `middleware.ts`
 - `authenticate`: Extracts Bearer token from `Authorization` header, verifies JWT. Sets `req.user`. Returns 401 if missing/invalid.
 
 ### `employees.ts`
-- Interface: `{ id: number, name: string, role: string, picture: string | null, status: string }`
-- `getAllEmployees()`, `getEmployeeById(id)`, `createEmployee({name, role?})`, `updateEmployee(id, {name?, role?, picture?})`, `deleteEmployee(id)` (soft delete → INACTIVE)
-- All IDs are `INTEGER` in DB
+- Interface: `{ id: number, name: string, role: string, picture: string | null, qrCode: string | null, status: string }`
+- `getAllEmployees()`, `getEmployeeById(id)`, `createEmployee({ id?, name, role? })`, `updateEmployee(id, { employeeId?, name?, role?, picture?, qrCode? })`, `deleteEmployee(id)`
+- Employee creation reuses the **lowest available free EMPLOYEE_ID** unless a manual employee ID is supplied
+- Employee updates can now change `EMPLOYEE_ID`; related rows in ATTENDANCE_LOGS, ADMINS, and ADMIN_CREDENTIALS are migrated to the new ID
+- If an employee ID changes, stored QR code is cleared unless a replacement QR is explicitly supplied
+- Employee deletion is **permanent DB deletion**, not soft delete; it also removes related ATTENDANCE_LOGS, ADMINS, and ADMIN_CREDENTIALS rows
+- Employee IDs are `BIGINT` in DB and are handled in code as positive safe integers
 
 ### `employeeRoutes.ts`
 - All routes require JWT (`authenticate` middleware)
 - `GET /api/employees` — list all
-- `POST /api/employees` — `{ name, role }` → create
-- `PUT /api/employees/:id` — `{ name?, role?, picture? }` → update
-- `DELETE /api/employees/:id` — soft delete
+- `POST /api/employees` — `{ employeeId?, name, role }` → create
+- `PUT /api/employees/:id` — `{ employeeId?, name?, role?, picture?, qrCode? }` → update
+- `DELETE /api/employees/:id` — permanent delete
+  - Requires body `{ password }`
+  - Verifies the currently logged-in admin password before deleting
+- If the logged-in admin changes their own employee ID, the route returns a fresh JWT so the current session stays valid
 
 ### `kioskRoutes.ts`
 - **No JWT auth** (public kiosk device)
 - `GET /api/kiosk/employee/:id` — returns employee or 404/403 (inactive)
-- `POST /api/kiosk/attendance` — body: `{ employeeId: number, action: 'IN' | 'OUT', location: 'OFFICE' | 'ONSITE', site?: string }`
+- `POST /api/kiosk/attendance` — body: `{ employeeId: number | string, action: 'IN' | 'OUT', location: 'OFFICE' | 'ONSITE', site?: string }`
   - **Regular IN (location=OFFICE)**: Inserts new ATTENDANCE_LOGS row with STATUS=NULL. 409 if already clocked in today.
   - **OUT**: Updates TIME_OUT and STATUS=NULL (status computed dynamically). 409 if no clock-in or already clocked out.
   - **Onsite service (action=IN, location=ONSITE)**: Updates LOCATION and SITE on the **existing** record only — does NOT create a new row. Returns 409 "Employee has not clocked in yet" if no record exists for today. Cannot create a fresh ONSITE record; employee must first scan their RFID (creates OFFICE record), then use Onsite Service to update.
   - All STATUS writes are NULL — never stores PENDING/PRESENT/etc.
   - Returns: `{ message, time: Date }`
+- Uses `parseEmployeeId()` instead of raw `parseInt()` so backend ID validation stays consistent with the `BIGINT` migration
 
 ### `attendanceRoutes.ts`
 - Requires JWT
@@ -216,11 +248,23 @@ CREATE TABLE ATTENDANCE_LOGS (
 ### `LoginPage.tsx` / `SignUpPage.tsx`
 - POST to `/api/auth/login` and `/api/auth/signup`
 - JWT stored in `localStorage` as `authToken`
+- Non-admin employee IDs are blocked from both login and signup paths
+- API base now comes from `src/imports/api.ts` instead of component-local hardcoded localhost strings
 
 ### `EmployeeList.tsx`
-- Fetches `GET /api/employees`, displays table with columns: Employee ID, Name, Role, Photo, Status
-- CRUD: Insert (POST), Edit (PUT), Delete (soft delete via DELETE)
+- Fetches `GET /api/employees`, displays table with columns: Employee ID, Name, Role, Photo, QR Code, Status
+- CRUD: Insert (POST), Edit (PUT), Delete (permanent delete via DELETE)
+- Supports manual employee ID entry on insert and edit
+- Insert requires all visible required fields, and Add Employee stays disabled until required fields are complete
 - Photo cell: click opens picture modal → file input → reads as base64 → PUT to `/api/employees/:id` with `{ picture: base64 }`
+- Delete flow is now double-confirmed:
+  - First modal: delete confirmation
+  - Second modal: admin must re-enter their password
+- QR flow:
+  - Select employee → `Generate QR`
+  - QR code is generated from employee ID
+  - Stored back to `EMPLOYEES.QR_CODE`
+  - Previewable and printable later from the same screen
 - All requests use `Authorization: Bearer <token>` header
 
 ### `TimeInOut.tsx`
@@ -269,13 +313,16 @@ CREATE TABLE ATTENDANCE_LOGS (
 
 ### `Layout.tsx`
 - App shell with sidebar navigation
+- Upper-right admin avatar now reflects the logged-in admin's `PICTURE` from EMPLOYEES and refreshes after photo changes in EmployeeList
+- Uses the current `picture` field shape, not the older `profilePicture` name
 
 ---
 
 ## 8. Kiosk App — `attendance-system/src/app/components/KioskHome.tsx`
 
 - All localStorage/mock data removed. Fully API-driven.
-- API base: `http://localhost:5000/api/kiosk`
+- API base is environment-driven through `attendance-system/src/imports/api.ts`
+- Default dev fallback remains `http://localhost:5000/api/kiosk`
 - Screen states: `home`, `success`, `manual-logout`, `onsite-service`
 - **Main scan flow** (home screen):
   - RFID reader emulates keyboard → input has `autoFocus` + `Enter` key submit
@@ -292,6 +339,10 @@ CREATE TABLE ATTENDANCE_LOGS (
   - Success screen shows: "LOCATION UPDATED TO ONSITE" + site name
 - Clock in top-left, date below it, company logo
 - Auto-reset to home after success (timeout)
+- Electron dev wiring has been corrected to use the kiosk Vite port `5174`, and `electron:dev` now attaches to an already-running kiosk dev server instead of starting a second Vite instance
+- The kiosk is still a development flow until packaged; production installer/distribution is still pending
+
+> NOTE: The kiosk flow is implemented and testable by typed ID input, but it has **not yet been validated against a real RFID reader device** in this handoff phase.
 
 ---
 
@@ -314,25 +365,91 @@ CREATE TABLE ATTENDANCE_LOGS (
 - [x] Port separation: smartqweb=5173, attendance-system=5174, server=5000
 - [x] CORS allows Electron (no-origin) and both Vite ports
 - [x] `tsc --noEmit` passes with no type errors on server
+- [x] Electron dev mode fixed: correct kiosk port (`5174`) and reliable `!app.isPackaged` dev detection
+- [x] Employee deletion now permanently removes rows from DB and reuses freed employee IDs on later inserts
+- [x] Employee delete requires second confirmation via admin password re-entry
+- [x] Admin avatar in web header reflects the admin employee photo from DB
+- [x] Admin auth hardened so non-admin employee IDs cannot gain access through login or signup
+- [x] Employee IDs expanded to `BIGINT` in source schema and live Firebird DB
+- [x] Shared employee ID parsing added across auth, employee, kiosk, and attendance routes
+- [x] Manual employee ID insert/edit support added in EmployeeList and backend
+- [x] Frontend API bases moved to env-backed helpers instead of hardcoded localhost strings
+- [x] QR generation, persistence, preview, and printing added to EmployeeList
+- [x] Live DB migration to add `EMPLOYEES.QR_CODE` completed and verified
 
 ---
 
 ## 10. Pending Tasks
 
-### STEP 5 — RFID ID Type Alignment
+The system is feature-complete enough for core attendance use, but these are the important remaining items before calling deployment finished.
 
-RFID card readers emit strings that may have leading zeros (e.g. `"00123456"`). The DB `EMPLOYEE_ID` is `INTEGER`.
+### STEP — Real RFID Validation
 
-**Current behavior**: `KioskHome.tsx` does `parseInt(employeeId.trim(), 10)` which strips leading zeros. The server also does `parseInt(String(employeeId), 10)`.
+The kiosk flow works in code and in typed-input testing, but real scanner behavior is still not locked down.
 
-**Decision needed from user**: Should EMPLOYEE_IDs stored in DB match the raw RFID string (meaning store as VARCHAR) or strip leading zeros (keep INTEGER)?
+Validation still needed:
+1. Test with the actual RFID reader in keyboard-emulation mode
+2. Confirm suffix behavior such as automatic `Enter`, timing, and focus stability
+3. Confirm whether the raw scanned identifier should remain a numeric employee ID or whether a separate RFID/string field is needed
 
-- If keeping INTEGER: current behavior is correct. Just document that employee IDs must be assigned by stripping leading zeros from the RFID card number.
-- If switching to VARCHAR: `EMPLOYEE_ID` column type must change, all `parseInt()` calls removed, and related code updated.
+Important current behavior:
+1. The backend now validates IDs through `parseEmployeeId()` rather than loose `parseInt()` usage
+2. Employee IDs are still treated as numeric values even after the `BIGINT` migration
+3. Leading-zero RFID strings are still a business-rule decision, not yet finalized
 
-**Recommended action**: Ask the user which RFID cards they're using and confirm the ID format. Do not change the schema until confirmed.
+### STEP — QR Scanner Validation
 
----
+Admin-side QR generation/storage is already implemented. What is still pending is validating how the target QR scanner behaves and whether kiosk-side scanning should read:
+
+1. Plain employee ID only
+2. A richer payload in the future
+
+The safest current assumption is to keep QR payloads as employee ID only until the target scanner hardware is tested.
+
+### STEP — Single-Port Admin Runtime
+
+This is the main remaining web deployment task.
+
+Goal:
+1. Visiting one localhost port on the target PC should open the working admin app
+2. No separate Vite frontend terminal should be needed in production
+
+Target shape:
+1. Build `smartqweb`
+2. Serve its built assets from the Express backend in production
+3. Keep development mode split as it is today, but collapse production into one backend-served runtime
+
+### STEP — Packaged Kiosk Application
+
+This is the main remaining kiosk deployment task.
+
+Goal:
+1. The kiosk should run like a normal installed app
+2. The user should not need VS Code or a dev server to open it
+
+Current status:
+1. Electron dev flow is fixed
+2. `npm run electron:build` exists
+3. Production packaging and target-PC validation are still pending
+
+### STEP — Laptop To Target-PC Transition
+
+This deployment handoff is still partially procedural and should be treated as active remaining work.
+
+Target-PC checklist:
+1. Install Node.js
+2. Install Firebird 5 and apply the same `firebird.conf` compatibility changes
+3. Copy the working `ATTENDANCE.FDB` with its populated employee/admin data
+4. Copy the application repositories or release artifacts
+5. Configure production API base values for the kiosk and admin runtime
+6. Run the backend as the host process for the admin app
+7. Install the packaged kiosk app on the kiosk machine
+
+The intended end state is:
+1. Admin app: one port, one backend process
+2. Kiosk app: one installed application
+3. Database: copied with the existing employee/RFID data already loaded
+4. No requirement to manually open four development terminals on the destination system
 
 ### STEP — End-to-End Smoke Test
 
@@ -343,35 +460,25 @@ COMMIT;
 ```
 
 Test checklist:
-1. Start all three services:
+1. Start the current development stack:
    - `cd smartqweb/server && npm run dev`
    - `cd smartqweb && npm run dev`
    - `cd attendance-system && npm run dev`
-2. Sign up an admin → verify employee row created in DB via EmployeeList
-3. Add a real employee in EmployeeList
-4. On kiosk (localhost:5174), scan/type the employee ID → confirm IN recorded
-5. Check SearchAttendance (localhost:5173) → confirm record appears with status CLOCKED IN, correct time
-6. Scan again on kiosk → confirm auto-detects OUT, status computes (PRESENT/LATE/UNDERTIME etc.)
-7. Use Onsite Service → enter ID + site → confirm Location/Site updated in SearchAttendance
-8. Use admin TimeInOut form → enter a past-date record with status override → confirm in SearchAttendance
-9. Generate report for today → confirm CSV downloads with BOM, readable dates, Location/Site columns
+2. Verify admin login/signup still works only for admin-role employees
+3. Add or edit an employee with manual ID, photo, and QR generation
+4. On kiosk, scan/type the employee ID and verify IN then OUT flow
+5. Verify SearchAttendance and GenerateReports show correct status, location, site, and late-state behavior
+6. Verify printed QR scans correctly with intended hardware
 
----
+### STEP — Facial Recognition
 
-### STEP — Electron Dev Port Fix (Minor)
+Facial recognition is intentionally last.
 
-`attendance-system/electron/main.cjs` may still reference port `5173` instead of `5174` for the `electron:dev` script. Verify and update if needed.
-
----
-
-### STEP — Production Build Notes (Future)
-
-- **Kiosk**: `npm run electron:build` in `attendance-system/` — produces NSIS installer in `release/`
-  - `electron/main.cjs` loads `./dist/index.html`; the Vite base is `'./'`
-  - Must hardcode the server IP (not localhost) in `KioskHome.tsx` for production if server runs on a different machine
-- **Web panel**: `npm run build` in `smartqweb/` → `dist/`. Serve with nginx or `serve -s dist`
-- **Server**: `npm run build` then `node dist/index.js` in `smartqweb/server/`
-- **On admin PC**: install Firebird 5, apply same `firebird.conf` edits, copy `.fdb`, update `.env` with correct absolute path
+Do not begin it until:
+1. single-port admin deployment is done
+2. packaged kiosk deployment is done
+3. real RFID and QR hardware behavior are validated
+4. the copied database flow on the target PC is stable
 
 ---
 
@@ -381,7 +488,7 @@ Test checklist:
 
 2. **BLOB resolver**: `node-firebird` returns BLOB columns as async callback functions, not values. The `resolveBlobs()` function in `db.ts` handles this. Any new query returning a BLOB column (like `PICTURE`) must go through `query()` which already calls `resolveBlobs`.
 
-3. **IDs are auto-incremented manually**: No SEQUENCE/GENERATOR is used. All INSERTs do `SELECT COALESCE(MAX(ID), 0) + 1 AS NEW_ID FROM TABLE` first. This is not race-safe but acceptable for a single-office deployment.
+3. **IDs are still managed manually**: No SEQUENCE/GENERATOR is used. The code now uses shared gap-filling logic through `getNextAvailableId()` so the lowest missing numeric ID is reused. This is still not race-safe, but acceptable for the current single-office deployment model.
 
 4. **STATUS = NULL migration**: If you inherit a DB where rows already have STATUS = 'PENDING', 'PRESENT', etc. (written by the old code), the dynamic `computeStatus()` will be skipped for those rows because non-null STATUS is treated as an admin override. Run this in isql before testing:
    ```sql
@@ -399,9 +506,17 @@ Test checklist:
 
 9. **Duplicate stale code bug**: When editing component files, be careful not to leave old function implementations or `return` statements after the component's closing `}`. This has been a recurring issue — always check for orphaned code after edits. Pattern to fix: find the duplicate declaration line with `Select-String`, truncate with `$lines[0..N] | Set-Content`.
 
-10. **Electron dev port**: `attendance-system` kiosk runs on port **5174** (not 5173). The `electron:dev` script in `package.json` still references `wait-on http://localhost:5173` — this needs to be updated to 5174 before running in Electron dev mode.
+10. **Electron dev startup model**: `attendance-system` kiosk runs on port **5174**. Current `electron:dev` expects the kiosk Vite dev server to already be running, then launches Electron against it.
 
-11. **Module resolution**: Server uses `"type": "module"` in `package.json` so all imports must use `.js` extensions (e.g. `import { query } from './db.js'` even though the source file is `.ts`). TypeScript handles this via `moduleResolution: node`.
+11. **Permanent employee deletion**: Deleting an employee now removes related attendance logs and admin credential/admin rows. This is intentional but destructive; do not assume old soft-delete semantics.
+
+12. **Admin avatar source**: The web header avatar reads from EMPLOYEES.PICTURE via `/api/employees`, not from a separate profile store.
+
+13. **Module resolution**: Server uses `"type": "module"` in `package.json` so all imports must use `.js` extensions (e.g. `import { query } from './db.js'` even though the source file is `.ts`). TypeScript handles this via `moduleResolution: node`.
+
+14. **Generated files should not be committed**: `node_modules/`, `dist/`, and local DB backup `.bak` files are local artifacts. Keep repo commits focused on source, migration scripts, and documentation.
+
+15. **Live DB transfer is separate from source control**: the working `ATTENDANCE.FDB` is part of deployment handoff data, not something to rely on as the primary transport mechanism inside git history.
 
 ---
 

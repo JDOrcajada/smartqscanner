@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router';
+import { API_BASE } from '../../imports/api';
 
 export default function LoginPage() {
   const [employeeNumber, setEmployeeNumber] = useState('');
@@ -32,7 +33,7 @@ export default function LoginPage() {
 
     setLoading(true);
     try {
-      const response = await fetch('http://localhost:5000/api/auth/login', {
+      const response = await fetch(`${API_BASE}/auth/login`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -106,18 +107,9 @@ export default function LoginPage() {
               />
             </div>
 
-            <div>
-              <a
-                href="#"
-                onClick={(e) => {
-                  e.preventDefault();
-                  // TODO: Implement forgot password functionality
-                }}
-                className="text-white underline hover:no-underline text-sm"
-              >
-                Forgot Password?
-              </a>
-            </div>
+            <p className="text-white/85 text-sm">
+              Password resets are currently handled by an administrator.
+            </p>
 
             <div className="flex justify-center">
               <button
@@ -147,9 +139,9 @@ export default function LoginPage() {
         {/* Logo Section */}
         <div className="hidden md:flex flex-1 items-center justify-center bg-white">
           <div className="flex items-center gap-6 p-12">
-            <div className="text-8xl text-gray-400">🏢</div>
+            <div className="text-8xl text-gray-400"><img src="./smartqlogo.png" alt="" /></div>
             <div className="text-left">
-              <p className="text-3xl font-bold text-gray-800">SmartQ Systems</p>
+              <p className="text-4xl font-bold text-gray-800">SMARTQ SYSTEMS</p>
               <p className="text-sm text-gray-400 mt-2">Attendance System</p>
             </div>
           </div>

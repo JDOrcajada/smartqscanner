@@ -1,7 +1,8 @@
 import { useState, useEffect } from "react";
 import { Search } from "lucide-react";
+import { API_BASE } from '../../imports/api';
 
-const API = "http://localhost:5000/api";
+const API = API_BASE;
 
 function getAuthHeaders(): Record<string, string> {
   const token = localStorage.getItem("authToken");
@@ -31,9 +32,13 @@ export function SearchAttendance() {
   useEffect(() => {
     setLoading(true);
     fetch(`${API}/attendance`, { headers: getAuthHeaders() })
-      .then((r) => r.json())
-      .then((data) => { setRecords(data); setLoading(false); })
-      .catch(() => { setPageError("Failed to load attendance records"); setLoading(false); });
+      .then(async (r) => {
+        if (!r.ok) throw new Error(r.status === 401 ? "Session expired — please log in again" : "Failed to load attendance records");
+        const data = await r.json();
+        setRecords(Array.isArray(data) ? data : []);
+        setLoading(false);
+      })
+      .catch((err) => { setPageError(err.message || "Failed to load attendance records"); setLoading(false); });
   }, []);
 
   const filteredRecords = records.filter((record) => {

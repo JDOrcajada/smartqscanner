@@ -1,7 +1,8 @@
 import { useState } from "react";
 import { Calendar, Download, FileText } from "lucide-react";
+import { API_BASE } from '../../imports/api';
 
-const API = "http://localhost:5000/api";
+const API = API_BASE;
 
 function getAuthHeaders(): Record<string, string> {
   const token = localStorage.getItem("authToken");
