@@ -1,7 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { getEmployeeById } from './employees.js';
 import { query, execute, getNextAvailableId } from './db.js';
-import { parseEmployeeId } from './employeeId.js';
 
 const kioskRouter = Router();
 
@@ -9,8 +8,8 @@ const kioskRouter = Router();
 
 // GET /api/kiosk/employee/:id — look up employee for display on scan
 kioskRouter.get('/employee/:id', async (req: Request, res: Response) => {
-  const id = parseEmployeeId(req.params.id);
-  if (id === null) {
+  const id = parseInt(req.params.id, 10);
+  if (isNaN(id)) {
     return res.status(400).json({ message: 'Invalid employee ID' });
   }
   try {
@@ -31,9 +30,9 @@ kioskRouter.get('/employee/:id', async (req: Request, res: Response) => {
 // Body: { employeeId: number, action: 'IN' | 'OUT', location?: string, site?: string }
 kioskRouter.post('/attendance', async (req: Request, res: Response) => {
   const { employeeId, action, location, site } = req.body;
-  const id = parseEmployeeId(employeeId);
+  const id = parseInt(String(employeeId), 10);
 
-  if (id === null) {
+  if (isNaN(id)) {
     return res.status(400).json({ message: 'Invalid employee ID' });
   }
   if (action !== 'IN' && action !== 'OUT') {

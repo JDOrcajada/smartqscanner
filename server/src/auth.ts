@@ -2,7 +2,6 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { config } from './config.js';
 import { query, execute, getNextAvailableId } from './db.js';
-import { parseEmployeeId } from './employeeId.js';
 
 export const hashPassword = async (password: string): Promise<string> => {
   const salt = await bcrypt.genSalt(10);
@@ -45,8 +44,8 @@ export const signup = async (
   employeeIdStr: string,
   password: string
 ): Promise<{ success: boolean; message: string; token?: string }> => {
-  const employeeId = parseEmployeeId(employeeIdStr);
-  if (employeeId === null) return { success: false, message: 'Invalid employee ID' };
+  const employeeId = parseInt(employeeIdStr, 10);
+  if (isNaN(employeeId)) return { success: false, message: 'Invalid employee ID' };
 
   try {
     const empRows = await query<any>(
@@ -124,8 +123,8 @@ export const login = async (
   employeeIdStr: string,
   password: string
 ): Promise<{ success: boolean; message: string; token?: string }> => {
-  const employeeId = parseEmployeeId(employeeIdStr);
-  if (employeeId === null) return { success: false, message: 'Invalid employee ID' };
+  const employeeId = parseInt(employeeIdStr, 10);
+  if (isNaN(employeeId)) return { success: false, message: 'Invalid employee ID' };
 
   try {
     // Verify employee exists

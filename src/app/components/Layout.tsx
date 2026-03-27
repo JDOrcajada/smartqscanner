@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { Outlet, Link, useLocation } from "react-router";
-import { Clock, Search, FileText, LogOut, User, Users } from "lucide-react";
+import { Clock, Search, BarChart2, FileText, LogOut, User, Users } from "lucide-react";
 import { API_BASE } from '../../imports/api';
 
 interface EmployeeProfile {
@@ -71,6 +71,7 @@ export function Layout() {
   const navItems = [
     { path: "/", label: "Time In / Time Out", icon: Clock },
     { path: "/search", label: "Search Attendance", icon: Search },
+    { path: "/monthly", label: "Monthly Records", icon: BarChart2 },
     { path: "/reports", label: "Generate Reports", icon: FileText },
     { path: "/employees", label: "Employee List", icon: Users },
     { path: "/logout", label: "Manual Logout", icon: LogOut },

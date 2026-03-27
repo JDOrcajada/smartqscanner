@@ -17,12 +17,6 @@ const STATUS_OPTIONS = [
   { value: "UNDERTIME", label: "Undertime" },
   { value: "ABSENT", label: "Absent" },
   { value: "CLOCKED IN", label: "Clocked In" },
-  { value: "OVERTIME 1HR", label: "Overtime 1hr" },
-  { value: "OVERTIME 2HRS", label: "Overtime 2hrs" },
-  { value: "OVERTIME 3HRS", label: "Overtime 3hrs" },
-  { value: "OVERTIME 4HRS", label: "Overtime 4hrs" },
-  { value: "OVERTIME 5HRS", label: "Overtime 5hrs" },
-  { value: "OVERTIME 6HRS", label: "Overtime 6hrs" },
 ];
 
 type SubmitStatus = "idle" | "loading" | "success" | "error";
@@ -32,6 +26,7 @@ export function TimeInOut() {
   const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
   const [timeIn, setTimeIn] = useState("");
   const [timeOut, setTimeOut] = useState("");
+  const [timeOutDate, setTimeOutDate] = useState("");  // empty = same as date
   const [location, setLocation] = useState<"OFFICE" | "ONSITE">("OFFICE");
   const [site, setSite] = useState("");
   const [statusOverride, setStatusOverride] = useState("");
@@ -47,6 +42,7 @@ export function TimeInOut() {
     setDate(new Date().toISOString().slice(0, 10));
     setTimeIn("");
     setTimeOut("");
+    setTimeOutDate("");
     setLocation("OFFICE");
     setSite("");
     setStatusOverride("");
@@ -70,6 +66,7 @@ export function TimeInOut() {
     try {
       const body: Record<string, any> = { employeeId: id, date, timeIn, location };
       if (timeOut) body.timeOut = timeOut;
+      if (timeOut && timeOutDate && timeOutDate !== date) body.timeOutDate = timeOutDate;
       if (location === "ONSITE" && site.trim()) body.site = site.trim();
       if (statusOverride) body.status = statusOverride;
 
@@ -167,6 +164,23 @@ export function TimeInOut() {
                     />
                   </div>
                 </div>
+
+                {/* Row 2b: Time Out date (only shown when timeOut is filled) */}
+                {timeOut && (
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Time Out Date
+                      <span className="text-gray-400 text-xs font-normal ml-1">(if different from the date above, e.g. next-day overtime)</span>
+                    </label>
+                    <input
+                      type="date"
+                      value={timeOutDate || date}
+                      onChange={(e) => setTimeOutDate(e.target.value)}
+                      min={date}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none"
+                    />
+                  </div>
+                )}
 
                 {/* Row 3: Location + Site */}
                 <div className="grid grid-cols-2 gap-3">

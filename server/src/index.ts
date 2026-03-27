@@ -2,10 +2,13 @@ import express from 'express';
 import cors from 'cors';
 import { config } from './config.js';
 import { initializeDbPool } from './db.js';
+import { runMigrations } from './migrate.js';
 import authRouter from './routes.js';
 import employeeRouter from './employeeRoutes.js';
 import kioskRouter from './kioskRoutes.js';
 import attendanceRouter from './attendanceRoutes.js';
+import leaveRouter from './leaveRoutes.js';
+import holidayRouter from './holidayRoutes.js';
 
 const app = express();
 
@@ -26,6 +29,8 @@ app.use('/api/auth', authRouter);
 app.use('/api/employees', employeeRouter);
 app.use('/api/kiosk', kioskRouter);
 app.use('/api/attendance', attendanceRouter);
+app.use('/api/leaves', leaveRouter);
+app.use('/api/holidays', holidayRouter);
 
 // Health check
 app.get('/api/health', (req, res) => {
@@ -36,6 +41,7 @@ app.get('/api/health', (req, res) => {
 const startServer = async () => {
   try {
     await initializeDbPool();
+    await runMigrations();
     app.listen(config.PORT, () => {
       console.log(`✓ Server running on http://localhost:${config.PORT}`);
       console.log(`✓ CORS enabled for ${config.CORS_ORIGIN}`);

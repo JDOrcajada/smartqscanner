@@ -1,76 +1,88 @@
-import * as Firebird from 'node-firebird';
+import odbc from 'odbc';
 import { config } from './config.js';
 
-const options: Firebird.Options = {
-  host: String(config.DB_HOST),
-  port: Number(config.DB_PORT),
-  database: String(config.DB_DATABASE),
-  user: String(config.DB_USER),
-  password: String(config.DB_PASSWORD),
-  lowercase_keys: true,
+// DSN-less Firebird ODBC connection string.
+// The Firebird ODBC driver accepts DBNAME as host/port:path (same as isql).
+const connectionString =
+  `Driver={Firebird/InterBase(r) driver};` +
+  `Dbname=${config.DB_HOST}/${config.DB_PORT}:${config.DB_DATABASE};` +
+  `Uid=${config.DB_USER};` +
+  `Pwd=${config.DB_PASSWORD};` +
+  `charset=UTF8;`;
+
+let pool: odbc.Pool;
+
+// Firebird ODBC returns column names in uppercase — lowercase them for
+// compatibility with all existing route code (same contract as before).
+// BLOBs come back as Buffer objects — convert to UTF-8 string.
+// BigInt values (e.g. BIGINT PKs, COUNT results) are safe integers in our
+// schema, so convert them to Number so JSON.stringify never throws.
+function normalizeRows(rows: any[]): any[] {
+  return rows.map((row) => {
+    const out: Record<string, any> = {};
+    for (const key of Object.keys(row)) {
+      const val = row[key];
+      if (Buffer.isBuffer(val)) {
+        out[key.toLowerCase()] = val.toString('utf8');
+      } else if (typeof val === 'bigint') {
+        out[key.toLowerCase()] = Number(val);
+      } else {
+        out[key.toLowerCase()] = val;
+      }
+    }
+    return out;
+  });
+}
+
+export const initializeDbPool = async (): Promise<void> => {
+  pool = await odbc.pool({
+    connectionString,
+    initialSize: 2,
+    maxSize: 5,
+    connectionTimeout: 10,
+    loginTimeout: 10,
+  });
+  // Smoke-test one round-trip
+  const conn = await pool.connect();
+  await conn.close();
+  console.log('✓ Connected to Firebird database (ODBC)');
 };
 
-const pool = Firebird.pool(5, options);
-
-// Resolves any BLOB fields returned by node-firebird (they come back as functions)
-const resolveBlobs = (rows: any[]): Promise<any[]> =>
-  Promise.all(
-    rows.map((row) => {
-      const blobKeys = Object.keys(row).filter((k) => typeof row[k] === 'function');
-      if (!blobKeys.length) return Promise.resolve(row);
-      return Promise.all(
-        blobKeys.map(
-          (key) =>
-            new Promise<void>((res) => {
-              (row[key] as Function)((err: any, _: string, e: any) => {
-                if (err || !e) { row[key] = null; res(); return; }
-                const chunks: Buffer[] = [];
-                e.on('data', (c: Buffer) => chunks.push(c));
-                e.on('end', () => { row[key] = Buffer.concat(chunks).toString('utf8'); res(); });
-                e.on('error', () => { row[key] = null; res(); });
-              });
-            })
-        )
-      ).then(() => row);
-    })
-  );
-
-export const initializeDbPool = (): Promise<void> =>
-  new Promise((resolve, reject) => {
-    pool.get((err, db) => {
-      if (err) {
-        console.error('Failed to connect to Firebird database:', err);
-        return reject(err);
-      }
-      db.detach();
-      console.log('✓ Connected to Firebird database');
-      resolve();
-    });
+// Firebird ODBC cannot bind JS Date objects directly — convert them to the
+// 'YYYY-MM-DD HH:MM:SS' string format that the driver expects.
+// Also converts null/undefined consistently.
+function serializeParams(params: any[]): any[] {
+  return params.map((p) => {
+    if (p instanceof Date) {
+      // 'YYYY-MM-DD HH:MM:SS' — Firebird ODBC timestamp literal format
+      const pad = (n: number) => String(n).padStart(2, '0');
+      return (
+        `${p.getFullYear()}-${pad(p.getMonth() + 1)}-${pad(p.getDate())} ` +
+        `${pad(p.getHours())}:${pad(p.getMinutes())}:${pad(p.getSeconds())}`
+      );
+    }
+    return p ?? null;
   });
+}
 
-export const query = <T = any>(sql: string, params: any[] = []): Promise<T[]> =>
-  new Promise((resolve, reject) => {
-    pool.get((err, db) => {
-      if (err) return reject(err);
-      db.query(sql, params, (err, result) => {
-        db.detach();
-        if (err) return reject(err);
-        resolveBlobs(result ?? []).then((rows) => resolve(rows as T[])).catch(reject);
-      });
-    });
-  });
+export const query = async <T = any>(sql: string, params: any[] = []): Promise<T[]> => {
+  const conn = await pool.connect();
+  try {
+    const result = await conn.query<T>(sql, serializeParams(params));
+    return normalizeRows(Array.from(result)) as T[];
+  } finally {
+    await conn.close();
+  }
+};
 
-export const execute = (sql: string, params: any[] = []): Promise<void> =>
-  new Promise((resolve, reject) => {
-    pool.get((err, db) => {
-      if (err) return reject(err);
-      db.execute(sql, params, (err) => {
-        db.detach();
-        if (err) return reject(err);
-        resolve();
-      });
-    });
-  });
+export const execute = async (sql: string, params: any[] = []): Promise<void> => {
+  const conn = await pool.connect();
+  try {
+    await conn.query(sql, serializeParams(params));
+  } finally {
+    await conn.close();
+  }
+};
 
 const assertIdentifier = (value: string): string => {
   if (!/^[A-Z_][A-Z0-9_]*$/i.test(value)) {

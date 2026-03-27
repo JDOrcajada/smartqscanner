@@ -1,7 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { getAllEmployees, createEmployee, updateEmployee, deleteEmployee } from './employees.js';
 import { generateToken, verifyAdminPassword } from './auth.js';
-import { parseEmployeeId } from './employeeId.js';
 import { authenticate } from './middleware.js';
 
 const employeeRouter = Router();
@@ -25,20 +24,16 @@ employeeRouter.post('/', async (req: Request, res: Response) => {
     return res.status(400).json({ message: 'Name is required' });
   }
 
-  if (!role?.trim()) {
-    return res.status(400).json({ message: 'Role is required' });
-  }
-
   if (employeeId !== undefined) {
-    const parsedEmployeeId = parseEmployeeId(employeeId);
-    if (parsedEmployeeId === null) {
+    const parsedEmployeeId = Number(employeeId);
+    if (!Number.isInteger(parsedEmployeeId) || parsedEmployeeId <= 0) {
       return res.status(400).json({ message: 'Employee ID must be a positive integer' });
     }
   }
 
   try {
     const employee = await createEmployee({
-      id: employeeId !== undefined ? parseEmployeeId(employeeId) ?? undefined : undefined,
+      id: employeeId !== undefined ? Number(employeeId) : undefined,
       name: name.trim(),
       role: role?.trim(),
     });
@@ -50,24 +45,23 @@ employeeRouter.post('/', async (req: Request, res: Response) => {
 
 // PUT /api/employees/:id — update existing
 employeeRouter.put('/:id', async (req: Request, res: Response) => {
-  const id = parseEmployeeId(req.params.id);
-  if (id === null) return res.status(400).json({ message: 'Invalid employee ID' });
-  const { employeeId, name, role, picture, qrCode } = req.body;
+  const id = parseInt(req.params.id, 10);
+  if (isNaN(id)) return res.status(400).json({ message: 'Invalid employee ID' });
+  const { employeeId, name, role, picture } = req.body;
 
   if (employeeId !== undefined) {
-    const parsedEmployeeId = parseEmployeeId(employeeId);
-    if (parsedEmployeeId === null) {
+    const parsedEmployeeId = Number(employeeId);
+    if (!Number.isInteger(parsedEmployeeId) || parsedEmployeeId <= 0) {
       return res.status(400).json({ message: 'Employee ID must be a positive integer' });
     }
   }
 
   try {
     const employee = await updateEmployee(id, {
-      employeeId: employeeId !== undefined ? parseEmployeeId(employeeId) ?? undefined : undefined,
+      employeeId: employeeId !== undefined ? Number(employeeId) : undefined,
       name: name?.trim(),
       role: role?.trim(),
       picture: picture !== undefined ? picture : undefined,
-      qrCode: qrCode !== undefined ? qrCode : undefined,
     });
     if (!employee) return res.status(404).json({ message: 'Employee not found' });
 
@@ -91,8 +85,8 @@ employeeRouter.put('/:id', async (req: Request, res: Response) => {
 
 // DELETE /api/employees/:id — permanent delete with admin password confirmation
 employeeRouter.delete('/:id', async (req: Request, res: Response) => {
-  const id = parseEmployeeId(req.params.id);
-  if (id === null) return res.status(400).json({ message: 'Invalid employee ID' });
+  const id = parseInt(req.params.id, 10);
+  if (isNaN(id)) return res.status(400).json({ message: 'Invalid employee ID' });
 
   const { password } = req.body ?? {};
   if (!password?.trim()) {

@@ -5,6 +5,7 @@ import { SearchAttendance } from "./components/SearchAttendance";
 import { GenerateReports } from "./components/GenerateReports";
 import { ManualLogout } from "./components/ManualLogout";
 import { EmployeeList } from "./components/EmployeeList";
+import { MonthlyRecords } from "./components/MonthlyRecords";
 import LoginPage from "./components/LoginPage";
 import SignUpPage from "./components/SignUpPage";
 
@@ -29,6 +30,7 @@ export const router = createBrowserRouter([
     children: [
       { index: true, Component: TimeInOut },
       { path: "search", Component: SearchAttendance },
+      { path: "monthly", Component: MonthlyRecords },
       { path: "reports", Component: GenerateReports },
       { path: "logout", Component: ManualLogout },
       { path: "employees", Component: EmployeeList },
