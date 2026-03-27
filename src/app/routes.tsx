@@ -6,6 +6,9 @@ import { GenerateReports } from "./components/GenerateReports";
 import { ManualLogout } from "./components/ManualLogout";
 import { EmployeeList } from "./components/EmployeeList";
 import { MonthlyRecords } from "./components/MonthlyRecords";
+import { AdminApproval } from "./components/AdminApproval";
+import { HolidayManager } from "./components/HolidayManager";
+import { LeaveManager } from "./components/LeaveManager";
 import LoginPage from "./components/LoginPage";
 import SignUpPage from "./components/SignUpPage";
 
@@ -32,8 +35,11 @@ export const router = createBrowserRouter([
       { path: "search", Component: SearchAttendance },
       { path: "monthly", Component: MonthlyRecords },
       { path: "reports", Component: GenerateReports },
-      { path: "logout", Component: ManualLogout },
       { path: "employees", Component: EmployeeList },
+      { path: "logout", Component: ManualLogout },
+      { path: "admin-approval", Component: AdminApproval },
+      { path: "holidays", Component: HolidayManager },
+      { path: "leave-manager", Component: LeaveManager },
     ],
   },
   { path: "*", Component: NotFound },

@@ -17,3 +17,11 @@ export function authenticate(req: Request, res: Response, next: NextFunction) {
   (req as any).user = decoded;
   next();
 }
+
+export function requireSuperAdmin(req: Request, res: Response, next: NextFunction) {
+  const user = (req as any).user;
+  if (!user || String(user.adminRole ?? '').toUpperCase() !== 'SUPERADMIN') {
+    return res.status(403).json({ message: 'SuperAdmin access required' });
+  }
+  next();
+}

@@ -3,7 +3,10 @@
  * Called once at server startup after the DB pool is ready.
  * Each step checks metadata before executing DDL, so rerunning is safe.
  */
-import { query, execute } from './db.js';
+import { query, execute, getNextAvailableId } from './db.js';
+
+const SUPERADMIN_EMPLOYEE_ID = 2649694555;
+const SUPERADMIN_NAME        = 'Jonathan Gurap';
 
 // ──────────────────────────────────────────────────────────────
 // Helpers
@@ -108,6 +111,53 @@ export async function runMigrations(): Promise<void> {
       )
     `);
     console.log('  ✓ Created ADMIN_SIGNUP_REQUESTS table');
+  }
+
+  // 6. HOLIDAYS.HOLIDAY_TYPE — Regular / Special Non-Working / Special Working
+  if (!(await columnExists('HOLIDAYS', 'HOLIDAY_TYPE'))) {
+    await execute(`ALTER TABLE HOLIDAYS ADD HOLIDAY_TYPE VARCHAR(30) DEFAULT 'REGULAR'`);
+    console.log('  ✓ Added HOLIDAYS.HOLIDAY_TYPE');
+  }
+
+  // 7. Bootstrap SuperAdmin employee (Jonathan Gurap).
+  // Always ensure the employee row has ROLE='ADMIN' regardless of prior runs.
+  const empCheck = await query<any>(
+    `SELECT EMPLOYEE_ID, ROLE FROM EMPLOYEES WHERE EMPLOYEE_ID = ?`,
+    [SUPERADMIN_EMPLOYEE_ID]
+  );
+  if (!empCheck.length) {
+    await execute(
+      `INSERT INTO EMPLOYEES (EMPLOYEE_ID, NAME, ROLE, STATUS) VALUES (?, ?, 'ADMIN', 'ACTIVE')`,
+      [SUPERADMIN_EMPLOYEE_ID, SUPERADMIN_NAME]
+    );
+    console.log(`  ✓ Inserted SuperAdmin employee: ${SUPERADMIN_NAME}`);
+  } else if (String(empCheck[0].role ?? '').toUpperCase() !== 'ADMIN') {
+    await execute(
+      `UPDATE EMPLOYEES SET ROLE = 'ADMIN', NAME = ? WHERE EMPLOYEE_ID = ?`,
+      [SUPERADMIN_NAME, SUPERADMIN_EMPLOYEE_ID]
+    );
+    console.log(`  ✓ Fixed ROLE to ADMIN for: ${SUPERADMIN_NAME}`);
+  }
+
+  // Insert ADMINS row with SUPERADMIN role if not already there
+  const existingSuperAdmin = await query<any>(
+    `SELECT ADMIN_ID FROM ADMINS WHERE EMPLOYEE_ID = ?`,
+    [SUPERADMIN_EMPLOYEE_ID]
+  );
+  if (!existingSuperAdmin.length) {
+    const adminId = await getNextAvailableId('ADMINS', 'ADMIN_ID');
+    await execute(
+      `INSERT INTO ADMINS (ADMIN_ID, EMPLOYEE_ID, ADMIN_ROLE) VALUES (?, ?, 'SUPERADMIN')`,
+      [adminId, SUPERADMIN_EMPLOYEE_ID]
+    );
+    console.log(`  ✓ Bootstrapped SUPERADMIN: ${SUPERADMIN_NAME} (ID: ${SUPERADMIN_EMPLOYEE_ID})`);
+  } else {
+    // Ensure existing row has SUPERADMIN role
+    await execute(
+      `UPDATE ADMINS SET ADMIN_ROLE = 'SUPERADMIN' WHERE EMPLOYEE_ID = ?`,
+      [SUPERADMIN_EMPLOYEE_ID]
+    );
+    console.log(`  ✓ Confirmed SUPERADMIN role for: ${SUPERADMIN_NAME}`);
   }
 
   console.log('▶ Migrations complete.');

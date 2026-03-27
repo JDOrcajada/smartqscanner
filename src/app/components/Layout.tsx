@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { Outlet, Link, useLocation } from "react-router";
-import { Clock, Search, BarChart2, FileText, LogOut, User, Users } from "lucide-react";
+import { Clock, Search, BarChart2, FileText, LogOut, User, Users, UserCheck, CalendarDays, BadgeCheck } from "lucide-react";
 import { API_BASE } from '../../imports/api';
 
 interface EmployeeProfile {
@@ -16,6 +16,9 @@ export function Layout() {
   const location = useLocation();
   const [profile, setProfile] = useState<EmployeeProfile | null>(null);
   const [tooltipVisible, setTooltipVisible] = useState(false);
+
+  const adminRole = localStorage.getItem('adminRole') ?? 'ADMIN';
+  const isSuperAdmin = adminRole === 'SUPERADMIN';
 
   useEffect(() => {
     const timer = setInterval(() => {
@@ -75,6 +78,13 @@ export function Layout() {
     { path: "/reports", label: "Generate Reports", icon: FileText },
     { path: "/employees", label: "Employee List", icon: Users },
     { path: "/logout", label: "Manual Logout", icon: LogOut },
+    ...(isSuperAdmin
+      ? [
+          { path: "/admin-approval", label: "Admin Approval", icon: UserCheck },
+          { path: "/holidays", label: "Holiday Calendar", icon: CalendarDays },
+          { path: "/leave-manager", label: "Leave Manager", icon: BadgeCheck },
+        ]
+      : []),
   ];
 
   return (

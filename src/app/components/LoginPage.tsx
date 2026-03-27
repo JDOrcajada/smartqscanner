@@ -54,6 +54,7 @@ export default function LoginPage() {
       // Store token and redirect to dashboard
       localStorage.setItem('authToken', data.token);
       localStorage.setItem('employeeId', employeeNumber);
+      localStorage.setItem('adminRole', data.adminRole ?? 'ADMIN');
       navigate('/');
     } catch (err) {
       setError('Connection error. Make sure backend server is running.');

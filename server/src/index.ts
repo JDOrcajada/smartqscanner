@@ -9,6 +9,7 @@ import kioskRouter from './kioskRoutes.js';
 import attendanceRouter from './attendanceRoutes.js';
 import leaveRouter from './leaveRoutes.js';
 import holidayRouter from './holidayRoutes.js';
+import superadminRouter from './superadminRoutes.js';
 
 const app = express();
 
@@ -31,6 +32,7 @@ app.use('/api/kiosk', kioskRouter);
 app.use('/api/attendance', attendanceRouter);
 app.use('/api/leaves', leaveRouter);
 app.use('/api/holidays', holidayRouter);
+app.use('/api/superadmin', superadminRouter);
 
 // Health check
 app.get('/api/health', (req, res) => {

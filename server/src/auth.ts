@@ -28,8 +28,8 @@ export const verifyAdminPassword = async (
   return verifyPassword(password, credRows[0].password_hash);
 };
 
-export const generateToken = (employeeId: number): string => {
-  return jwt.sign({ employeeId }, config.JWT_SECRET, { expiresIn: config.JWT_EXPIRY });
+export const generateToken = (employeeId: number, adminRole: string): string => {
+  return jwt.sign({ employeeId, adminRole }, config.JWT_SECRET, { expiresIn: config.JWT_EXPIRY });
 };
 
 export const verifyToken = (token: string): any => {
@@ -43,7 +43,7 @@ export const verifyToken = (token: string): any => {
 export const signup = async (
   employeeIdStr: string,
   password: string
-): Promise<{ success: boolean; message: string; token?: string }> => {
+): Promise<{ success: boolean; message: string; token?: string; adminRole?: string; pending?: boolean }> => {
   const employeeId = parseInt(employeeIdStr, 10);
   if (isNaN(employeeId)) return { success: false, message: 'Invalid employee ID' };
 
@@ -54,30 +54,10 @@ export const signup = async (
     );
 
     if (!empRows.length) {
-      const [bootstrapRow] = await query<any>(
-        'SELECT COUNT(*) AS ADMIN_COUNT FROM ADMIN_CREDENTIALS'
-      );
-
-      const adminCount = Number(bootstrapRow?.admin_count ?? 0);
-      if (adminCount > 0) {
-        return {
-          success: false,
-          message: 'Only existing admin employees can sign up.',
-        };
-      }
-
-      await execute(
-        'INSERT INTO EMPLOYEES (EMPLOYEE_ID, NAME, ROLE, STATUS) VALUES (?, ?, ?, ?)',
-        [employeeId, '', 'ADMIN', 'ACTIVE']
-      );
-    } else {
-      const role = String(empRows[0].role ?? '').toUpperCase();
-      if (role !== 'ADMIN') {
-        return {
-          success: false,
-          message: 'Access denied. Only employees with ADMIN role can sign up.',
-        };
-      }
+      return {
+        success: false,
+        message: 'Employee ID not found. Contact your SuperAdmin to be added first.',
+      };
     }
 
     // Check if already has credentials
@@ -89,30 +69,50 @@ export const signup = async (
       return { success: false, message: 'This employee already has an account' };
     }
 
-    const hashedPassword = await hashPassword(password);
-
-    // Insert into ADMINS if not already there
+    // Determine if this employee is a SuperAdmin (can bypass approval)
     const adminRows = await query<any>(
-      'SELECT ADMIN_ID FROM ADMINS WHERE EMPLOYEE_ID = ?',
+      'SELECT ADMIN_ID, ADMIN_ROLE FROM ADMINS WHERE EMPLOYEE_ID = ?',
       [employeeId]
     );
-    if (!adminRows.length) {
-      const adminId = await getNextAvailableId('ADMINS', 'ADMIN_ID');
+    const isSuperAdmin =
+      adminRows.length &&
+      String(adminRows[0].admin_role ?? '').toUpperCase() === 'SUPERADMIN';
+
+    const hashedPassword = await hashPassword(password);
+
+    if (isSuperAdmin) {
+      // SuperAdmin signs up directly — no approval needed
+      const credentialId = await getNextAvailableId('ADMIN_CREDENTIALS', 'CREDENTIAL_ID');
       await execute(
-        'INSERT INTO ADMINS (ADMIN_ID, EMPLOYEE_ID) VALUES (?, ?)',
-        [adminId, employeeId]
+        'INSERT INTO ADMIN_CREDENTIALS (CREDENTIAL_ID, EMPLOYEE_ID, PASSWORD_HASH) VALUES (?, ?, ?)',
+        [credentialId, employeeId, hashedPassword]
       );
+      const token = generateToken(employeeId, 'SUPERADMIN');
+      return { success: true, message: 'SuperAdmin account created successfully', token, adminRole: 'SUPERADMIN' };
     }
 
-    // Insert credentials
-    const credentialId = await getNextAvailableId('ADMIN_CREDENTIALS', 'CREDENTIAL_ID');
+    // Regular admin — check for an existing pending request
+    const existingRequest = await query<any>(
+      `SELECT REQUEST_ID FROM ADMIN_SIGNUP_REQUESTS WHERE EMPLOYEE_ID = ? AND REQUEST_STATUS = 'PENDING'`,
+      [employeeId]
+    );
+    if (existingRequest.length) {
+      return { success: false, message: 'A signup request for this employee is already pending approval.' };
+    }
+
+    // Create pending signup request
+    const requestId = await getNextAvailableId('ADMIN_SIGNUP_REQUESTS', 'REQUEST_ID');
     await execute(
-      'INSERT INTO ADMIN_CREDENTIALS (CREDENTIAL_ID, EMPLOYEE_ID, PASSWORD_HASH) VALUES (?, ?, ?)',
-      [credentialId, employeeId, hashedPassword]
+      `INSERT INTO ADMIN_SIGNUP_REQUESTS (REQUEST_ID, EMPLOYEE_ID, PASSWORD_HASH, REQUEST_STATUS, CREATED_AT)
+       VALUES (?, ?, ?, 'PENDING', ?)`,
+      [requestId, employeeId, hashedPassword, new Date()]
     );
 
-    const token = generateToken(employeeId);
-    return { success: true, message: 'Account created successfully', token };
+    return {
+      success: true,
+      message: 'Your signup request has been submitted. A SuperAdmin will review it shortly.',
+      pending: true,
+    };
   } catch (error: any) {
     console.error('Signup error:', error);
     return { success: false, message: error.message || 'Signup failed' };
@@ -122,7 +122,7 @@ export const signup = async (
 export const login = async (
   employeeIdStr: string,
   password: string
-): Promise<{ success: boolean; message: string; token?: string }> => {
+): Promise<{ success: boolean; message: string; token?: string; adminRole?: string }> => {
   const employeeId = parseInt(employeeIdStr, 10);
   if (isNaN(employeeId)) return { success: false, message: 'Invalid employee ID' };
 
@@ -136,7 +136,7 @@ export const login = async (
 
     const employee = empRows[0];
     const adminRows = await query<any>(
-      'SELECT ADMIN_ID FROM ADMINS WHERE EMPLOYEE_ID = ?',
+      'SELECT ADMIN_ID, ADMIN_ROLE FROM ADMINS WHERE EMPLOYEE_ID = ?',
       [employeeId]
     );
     const role = String(employee.role ?? '').toUpperCase();
@@ -156,8 +156,9 @@ export const login = async (
     const passwordMatch = await verifyPassword(password, credRows[0].password_hash);
     if (!passwordMatch) return { success: false, message: 'Invalid password' };
 
-    const token = generateToken(employeeId);
-    return { success: true, message: 'Login successful', token };
+    const adminRole = String(adminRows[0].admin_role ?? 'ADMIN').toUpperCase();
+    const token = generateToken(employeeId, adminRole);
+    return { success: true, message: 'Login successful', token, adminRole };
   } catch (error: any) {
     console.error('Login error:', error);
     return { success: false, message: error.message || 'Login failed' };

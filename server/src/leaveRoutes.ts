@@ -187,4 +187,35 @@ leaveRouter.post('/assign', async (req: Request, res: Response) => {
   }
 });
 
+// ──────────────────────────────────────────────────────────────
+// PATCH /api/leaves/balance
+//
+// Body: { employeeId, year, slBalance, vlBalance }
+// Allows SuperAdmin to manually set leave balances for an employee+year.
+// ──────────────────────────────────────────────────────────────
+leaveRouter.patch('/balance', async (req: Request, res: Response) => {
+  const { employeeId, year, slBalance, vlBalance } = req.body;
+
+  const empId = parseInt(String(employeeId), 10);
+  const yr    = parseInt(String(year), 10);
+  const sl    = parseInt(String(slBalance), 10);
+  const vl    = parseInt(String(vlBalance), 10);
+
+  if (isNaN(empId) || isNaN(yr) || isNaN(sl) || isNaN(vl)) {
+    return res.status(400).json({ message: 'employeeId, year, slBalance, vlBalance are required numbers' });
+  }
+
+  try {
+    const leaveRow = await getOrCreateLeave(empId, yr);
+    await execute(
+      `UPDATE EMPLOYEE_LEAVES SET SL_BALANCE = ?, VL_BALANCE = ?, UPDATED_AT = ?
+       WHERE EMPLOYEE_ID = ? AND LEAVE_YEAR = ?`,
+      [sl, vl, new Date(), empId, yr]
+    );
+    return res.json({ message: 'Leave balances updated', slBalance: sl, vlBalance: vl });
+  } catch (err: any) {
+    return res.status(500).json({ message: err.message });
+  }
+});
+
 export default leaveRouter;

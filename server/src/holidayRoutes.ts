@@ -28,6 +28,7 @@ holidayRouter.get('/', async (_req: Request, res: Response) => {
         id:   r.holiday_id,
         date: new Date(r.holiday_date).toISOString().slice(0, 10),
         name: r.holiday_name ?? '',
+        type: (r.holiday_type ?? 'REGULAR') as string,
       }))
     );
   } catch (err: any) {
@@ -37,8 +38,11 @@ holidayRouter.get('/', async (_req: Request, res: Response) => {
 
 // POST /api/holidays  { date: 'YYYY-MM-DD', name: string }
 holidayRouter.post('/', async (req: Request, res: Response) => {
-  const { date, name } = req.body;
+  const { date, name, type } = req.body;
   if (!date) return res.status(400).json({ message: 'date is required (YYYY-MM-DD)' });
+
+  const validTypes = ['REGULAR', 'SPECIAL_NON_WORKING', 'SPECIAL_WORKING'];
+  const holidayType = validTypes.includes(type) ? type : 'REGULAR';
 
   try {
     // Duplicate check
@@ -51,11 +55,11 @@ holidayRouter.post('/', async (req: Request, res: Response) => {
 
     const holidayId = await getNextAvailableId('HOLIDAYS', 'HOLIDAY_ID');
     await execute(
-      `INSERT INTO HOLIDAYS (HOLIDAY_ID, HOLIDAY_DATE, HOLIDAY_NAME, CREATED_AT)
-       VALUES (?, ?, ?, ?)`,
-      [holidayId, date, (name ?? '').trim() || null, new Date()]
+      `INSERT INTO HOLIDAYS (HOLIDAY_ID, HOLIDAY_DATE, HOLIDAY_NAME, HOLIDAY_TYPE, CREATED_AT)
+       VALUES (?, ?, ?, ?, ?)`,
+      [holidayId, date, (name ?? '').trim() || null, holidayType, new Date()]
     );
-    return res.status(201).json({ id: holidayId, date, name: name ?? '' });
+    return res.status(201).json({ id: holidayId, date, name: name ?? '', type: holidayType });
   } catch (err: any) {
     return res.status(500).json({ message: err.message });
   }
