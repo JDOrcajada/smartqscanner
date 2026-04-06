@@ -69,7 +69,7 @@ employeeRouter.put('/:id', async (req: Request, res: Response) => {
     if (currentEmployeeId === id && employee.id !== id) {
       return res.json({
         ...employee,
-        token: generateToken(employee.id),
+        token: generateToken(employee.id, (req as any).user?.adminRole ?? 'ADMIN'),
       });
     }
 

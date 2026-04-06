@@ -1,5 +1,7 @@
 import express from 'express';
 import cors from 'cors';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import { config } from './config.js';
 import { initializeDbPool } from './db.js';
 import { runMigrations } from './migrate.js';
@@ -11,11 +13,16 @@ import leaveRouter from './leaveRoutes.js';
 import holidayRouter from './holidayRoutes.js';
 import superadminRouter from './superadminRoutes.js';
 
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const isProd = config.NODE_ENV === 'production';
+
 const app = express();
 
 // Middleware
 app.use(cors({
   origin: (origin, callback) => {
+    // In production the frontend is served from the same port — no cross-origin
+    if (isProd) return callback(null, true);
     // Allow web frontend, kiosk Electron app (no origin), and localhost variants
     const allowed = [config.CORS_ORIGIN, 'http://localhost:5174', 'http://localhost:3000'];
     if (!origin || allowed.includes(origin)) return callback(null, true);
@@ -38,6 +45,18 @@ app.use('/api/superadmin', superadminRouter);
 app.get('/api/health', (req, res) => {
   res.json({ status: 'OK', message: 'Server is running' });
 });
+
+// ── Production: serve the built React frontend ──────────────────────────────
+// The Vite build output lands at smartqweb/dist/ which is two levels up from
+// smartqweb/server/src/ (resolved at runtime, not relative to this source file).
+if (isProd) {
+  const distPath = path.resolve(__dirname, '../../dist');
+  app.use(express.static(distPath));
+  // React Router — any non-API path falls through to index.html
+  app.get('*', (_req, res) => {
+    res.sendFile(path.join(distPath, 'index.html'));
+  });
+}
 
 // Start server
 const startServer = async () => {

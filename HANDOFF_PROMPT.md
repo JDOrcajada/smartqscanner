@@ -2,6 +2,8 @@
 
 You are continuing development on a **SmartQ Attendance System** project. This document contains the complete context of what has been built, the exact current state of every key file, and the specific next tasks to implement. Read everything before touching any code.
 
+> Last updated: April 6, 2026 — Single-port production runtime, Electron kiosk packaging complete, mobile Flutter app cloned.
+
 ---
 
 ## 1. Project Overview
@@ -12,12 +14,16 @@ Two React + Vite applications and one Express backend, all in one monorepo:
 C:\Users\JD\Documents\smartqproj\
 ├── smartqweb/          ← Web admin panel (React + Vite + Tailwind)
 │   ├── src/app/components/   ← Page components
-│   ├── server/               ← Express + TypeScript backend (node-firebird)
+│   ├── server/               ← Express + TypeScript backend (ODBC/Firebird)
 │   └── database/
 │       ├── ATTENDANCE.FDB    ← Actual Firebird database file
 │       └── schema.sql        ← Reference schema (keep in sync)
-└── attendance-system/  ← Electron kiosk app (React + Vite + Tailwind)
-    └── src/app/components/KioskHome.tsx
+├── attendance-system/  ← Electron kiosk app (React + Vite + Tailwind)
+│   ├── electron/main.cjs        ← Electron main process
+│   ├── electron/preload.cjs     ← Exposes window.kioskConfig.serverUrl
+│   └── release/                 ← Built installer (Attendance Kiosk Setup 0.0.1.exe)
+└── mob_attendance/     ← Flutter mobile app (cloned, NOT yet connected to API)
+    └── lib/main.dart            ← Currently uses local SharedPreferences only
 ```
 
 ---
@@ -26,58 +32,78 @@ C:\Users\JD\Documents\smartqproj\
 
 | Service | Port | Notes |
 |---|---|---|
-| Express backend (`server/`) | **5000** | Run with `npm run dev` in `smartqweb/server/` |
-| Web admin panel (`smartqweb/`) | **5173** | Run with `npm run dev` in `smartqweb/` |
-| Kiosk app (`attendance-system/`) | **5174** | Run with `npm run dev` in `attendance-system/` |
+| Express backend (`server/`) | **5000** | Dev: `npm run dev` in `smartqweb/server/`. Prod: serves frontend too. |
+| Web admin panel (`smartqweb/`) | **5173** | Dev only: `npm run dev` in `smartqweb/`. |
+| Kiosk app (`attendance-system/`) | **5174** | Dev only: `npm run dev` in `attendance-system/`. |
 | Firebird DB | **3050** | localhost, SuperServer |
 
-Frontend API bases are now environment-driven, not hardcoded:
+Frontend API bases are environment-driven:
 
 - `smartqweb/src/imports/api.ts` uses `VITE_API_BASE_URL` with fallback `http://localhost:5000/api`
-- `attendance-system/src/imports/api.ts` uses `VITE_KIOSK_API_BASE_URL` or `VITE_API_BASE_URL`, with fallback `http://localhost:5000/api/kiosk`
+- `attendance-system/src/imports/api.ts` uses `window.kioskConfig.serverUrl` (runtime, from userData/config.json) first, then `VITE_KIOSK_API_BASE_URL` / `VITE_API_BASE_URL`, then `http://localhost:5000/api/kiosk`
 
-In development this still behaves like:
+### Production (single-port — IMPLEMENTED)
 
-- admin web → backend at `http://localhost:5000/api`
-- kiosk app → backend kiosk routes at `http://localhost:5000/api/kiosk`
+**Build** (from `smartqweb/`):
+```bash
+npm run build:prod
+# Runs: vite build && cd server && npm run build
+```
 
-The still-pending production deployment work is to make the admin app run from a single backend-served port and to package the kiosk so it launches like a normal installed app.
+**Run** (from `smartqweb/`):
+```bash
+npm run start:prod
+# Runs: cd server && NODE_ENV=production node dist/index.js
+```
+
+Then open `http://localhost:5000`. Express serves the built frontend and handles all `/api/*` routes.
+
+- `smartqweb/.env.production` sets `VITE_API_BASE_URL=/api` so the baked JS uses relative paths
+- `server/src/index.ts` detects `NODE_ENV=production` → `express.static(distPath)` + catch-all `index.html`
+
+### Database driver — ODBC (CRITICAL)
+
+The backend uses the `odbc` npm package with a DSN-less connection string:
+```
+Driver={Firebird/InterBase(r) driver};Dbname=host/port:path;...
+```
+
+**The Firebird ODBC driver must be installed on every machine running the Express server.**
+- Download: https://firebirdsql.org/en/odbc-driver/ (64-bit `Firebird_ODBC_*_x64.exe`)
+- No DSN entry is needed — just install the driver
+- Verify: ODBC Data Source Administrator → Drivers tab → `Firebird/InterBase(r) driver` listed
+
+> NOTE: The backend was migrated from `node-firebird` to `odbc` specifically to support the planned mobile application. The mobile app will also hit the Express API — ODBC was chosen to keep the DB layer stable across multiple client types.
+
+> NOTE: The old `firebird.conf` WireCrypt/AuthServer changes are **no longer required** since we no longer use `node-firebird` directly. ODBC handles its own wire protocol.
 
 ---
 
 ## 3. Tech Stack
 
 - **Frontend**: React 18, TypeScript, Vite, Tailwind CSS v4, shadcn/ui (Radix), Lucide icons
-- **Backend**: Node.js, Express 4, TypeScript, `tsx` (dev runner), `node-firebird ^2.0.2`
-- **Database**: Firebird 5.0 SuperServer on Windows
+- **Backend**: Node.js, Express 4, TypeScript, `tsx` (dev runner), **`odbc` npm package** (NOT node-firebird)
+- **Database**: Firebird 5.0 SuperServer on Windows, accessed via ODBC driver
 - **Auth**: `bcryptjs` for password hashing, `jsonwebtoken` (24h JWT in `localStorage` as `authToken`)
 - **Kiosk**: Electron wrapper around the Vite app (`attendance-system/electron/main.cjs`)
+- **Mobile**: Flutter (`mob_attendance/`) — cloned but not yet connected to API
 
 ---
 
-## 4. Firebird Configuration (CRITICAL)
+## 4. Firebird Configuration
 
-Default Firebird 5 uses `WireCrypt = Required` which is **incompatible with node-firebird**. This must be fixed:
+The Firebird ODBC driver handles its own wire protocol — the old `WireCrypt`/`AuthServer` changes to `firebird.conf` that were needed for `node-firebird` **are no longer required**.
 
-File: `C:\Program Files\Firebird\Firebird_5_0\firebird.conf`
-
-These two lines must be **uncommented** (remove the `#`):
-```
-WireCrypt = Enabled
-AuthServer = Srp256, Srp, Legacy_Auth
-```
-
-After editing, restart the service:
-```
-net stop FirebirdServerDefaultInstance
-net start FirebirdServerDefaultInstance
-```
-
-The server prints `✓ Connected to Firebird database` on success.
+Only requirement: **Install the Firebird ODBC driver** on the machine running the server.
+- Download: https://firebirdsql.org/en/odbc-driver/ (`Firebird_ODBC_*_x64.exe`, 64-bit)
+- No DSN entry needed — DSN-less connection string is used
+- After install, "Firebird/InterBase(r) driver" appears in ODBC Data Source Administrator → Drivers tab
 
 **DB credentials**: user `SYSDBA`, password `masterkey`
 
 **DB file path**: `C:/Users/JD/Documents/smartqproj/smartqweb/database/ATTENDANCE.FDB`
+
+> When deploying to the target PC, these paths will differ. Set them via environment variables in `smartqweb/server/.env` (see `config.ts` for all supported variables).
 
 ---
 
@@ -86,48 +112,84 @@ The server prints `✓ Connected to Firebird database` on success.
 ```sql
 CREATE TABLE EMPLOYEES (
   EMPLOYEE_ID BIGINT PRIMARY KEY,
-    NAME VARCHAR(255),                    -- NOT NULL was dropped
-    ROLE VARCHAR(100),                    -- renamed from DEPARTMENT
-    PICTURE BLOB SUB_TYPE TEXT,           -- added; stores base64 data URL
-  QR_CODE BLOB SUB_TYPE TEXT,           -- added; stores QR image data URL
-    STATUS VARCHAR(20) DEFAULT 'ACTIVE',
-    CREATED_AT TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+  NAME        VARCHAR(255),                -- NOT NULL was dropped
+  ROLE        VARCHAR(100),                -- renamed from DEPARTMENT
+  PICTURE     BLOB SUB_TYPE TEXT,          -- stores base64 data URL
+  QR_CODE     BLOB SUB_TYPE TEXT,          -- stores QR image data URL
+  STATUS      VARCHAR(20) DEFAULT 'ACTIVE',
+  CREATED_AT  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE ADMINS (
-    ADMIN_ID INTEGER PRIMARY KEY,
+  ADMIN_ID    INTEGER PRIMARY KEY,
   EMPLOYEE_ID BIGINT NOT NULL UNIQUE,
-    CREATED_AT TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (EMPLOYEE_ID) REFERENCES EMPLOYEES(EMPLOYEE_ID)
+  ADMIN_ROLE  VARCHAR(20) DEFAULT 'ADMIN', -- ← new: 'ADMIN' | 'SUPERADMIN'
+  CREATED_AT  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (EMPLOYEE_ID) REFERENCES EMPLOYEES(EMPLOYEE_ID)
 );
 
 CREATE TABLE ADMIN_CREDENTIALS (
-    CREDENTIAL_ID INTEGER PRIMARY KEY,
-  EMPLOYEE_ID BIGINT NOT NULL UNIQUE,
-    PASSWORD_HASH VARCHAR(255) NOT NULL,
-    CREATED_AT TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    UPDATED_AT TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (EMPLOYEE_ID) REFERENCES EMPLOYEES(EMPLOYEE_ID)
+  CREDENTIAL_ID INTEGER PRIMARY KEY,
+  EMPLOYEE_ID   BIGINT NOT NULL UNIQUE,
+  PASSWORD_HASH VARCHAR(255) NOT NULL,
+  CREATED_AT    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  UPDATED_AT    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (EMPLOYEE_ID) REFERENCES EMPLOYEES(EMPLOYEE_ID)
+);
+
+-- Pending signup queue — requests wait here until SuperAdmin approves/rejects
+CREATE TABLE ADMIN_SIGNUP_REQUESTS (
+  REQUEST_ID     INTEGER      NOT NULL PRIMARY KEY,
+  EMPLOYEE_ID    BIGINT       NOT NULL,
+  PASSWORD_HASH  VARCHAR(255) NOT NULL,
+  REQUEST_STATUS VARCHAR(20)  DEFAULT 'PENDING',   -- 'PENDING' | 'APPROVED' | 'REJECTED'
+  CREATED_AT     TIMESTAMP    DEFAULT CURRENT_TIMESTAMP,
+  REVIEWED_AT    TIMESTAMP,
+  REVIEWED_BY    BIGINT,                            -- EMPLOYEE_ID of the SuperAdmin who acted
+  FOREIGN KEY (EMPLOYEE_ID) REFERENCES EMPLOYEES(EMPLOYEE_ID)
 );
 
 CREATE TABLE ATTENDANCE_LOGS (
-    LOG_ID INTEGER PRIMARY KEY,
+  LOG_ID      INTEGER PRIMARY KEY,
   EMPLOYEE_ID BIGINT NOT NULL,
-    TIME_IN TIMESTAMP,
-    TIME_OUT TIMESTAMP,
-    DATE_LOG DATE NOT NULL,
-    STATUS VARCHAR(20) DEFAULT NULL,  -- NULL = compute dynamically; non-null = admin override
-    LOCATION VARCHAR(20),             -- 'OFFICE' or 'ONSITE'
-    SITE VARCHAR(100),                -- site name (only relevant when LOCATION='ONSITE')
-    CREATED_AT TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    UPDATED_AT TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (EMPLOYEE_ID) REFERENCES EMPLOYEES(EMPLOYEE_ID)
+  TIME_IN     TIMESTAMP,
+  TIME_OUT    TIMESTAMP,
+  DATE_LOG    DATE NOT NULL,
+  STATUS      VARCHAR(20) DEFAULT NULL,  -- NULL = compute dynamically; non-null = admin override
+  LOCATION    VARCHAR(20),               -- 'OFFICE' or 'ONSITE'
+  SITE        VARCHAR(100),              -- only meaningful when LOCATION='ONSITE'
+  LEAVE_TYPE  VARCHAR(5),               -- ← new: 'SL' | 'VL' | NULL
+  CREATED_AT  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  UPDATED_AT  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (EMPLOYEE_ID) REFERENCES EMPLOYEES(EMPLOYEE_ID)
+);
+
+-- SL / VL balance per employee per calendar year (default 15 each)
+CREATE TABLE EMPLOYEE_LEAVES (
+  LEAVE_ID    INTEGER NOT NULL PRIMARY KEY,
+  EMPLOYEE_ID BIGINT  NOT NULL,
+  LEAVE_YEAR  INTEGER NOT NULL,
+  SL_BALANCE  INTEGER DEFAULT 15,
+  VL_BALANCE  INTEGER DEFAULT 15,
+  UPDATED_AT  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (EMPLOYEE_ID) REFERENCES EMPLOYEES(EMPLOYEE_ID),
+  CONSTRAINT UQ_LEAVE_EMP_YEAR UNIQUE (EMPLOYEE_ID, LEAVE_YEAR)
+);
+
+-- Public holidays — dates flagged so auto-absent logic can exclude them
+CREATE TABLE HOLIDAYS (
+  HOLIDAY_ID   INTEGER NOT NULL PRIMARY KEY,
+  HOLIDAY_DATE DATE    NOT NULL,
+  HOLIDAY_NAME VARCHAR(100),
+  HOLIDAY_TYPE VARCHAR(30) DEFAULT 'REGULAR', -- ← 'REGULAR' | 'SPECIAL_NON_WORKING' | 'SPECIAL_WORKING'
+  CREATED_AT   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT UQ_HOLIDAY_DATE UNIQUE (HOLIDAY_DATE)
 );
 ```
 
 > NOTE: `EMAIL` and `DEPARTMENT` columns no longer exist on EMPLOYEES. Do not reference them.
 
-> NOTE: live schema and source schema are aligned for the current handoff state. The `BIGINT` employee ID migration and the `QR_CODE` column migration have already been applied to the live `ATTENDANCE.FDB` used during development.
+> NOTE: live schema is kept in sync via `migrate.ts` (7 idempotent steps run at server startup). All column additions and new tables above are already applied to the live `ATTENDANCE.FDB`.
 
 > CRITICAL: `STATUS` is **deliberately NULL** for all kiosk-written records. Status is computed dynamically at query time by `computeStatus()` in `attendanceRoutes.ts`. A non-null STATUS in the DB means an admin manually overrode it — do not overwrite it during computation.
 >
@@ -144,28 +206,45 @@ CREATE TABLE ATTENDANCE_LOGS (
 ### `index.ts`
 - Express app with CORS allowing: `localhost:5173`, `localhost:5174`, `localhost:3000`, and no-origin (Electron)
 - `express.json({ limit: '5mb' })` for base64 photo uploads
-- Routes: `/api/auth`, `/api/employees`, `/api/kiosk`, `/api/attendance`
+- Routes: `/api/auth`, `/api/employees`, `/api/kiosk`, `/api/attendance`, `/api/leaves`, `/api/holidays`, `/api/superadmin`
 - Health check: `GET /api/health`
-- Starts by calling `initializeDbPool()` first, then `app.listen(5000)`
+- Starts by calling `initializeDbPool()` → `runMigrations()` → `app.listen(5000)`
+
+### `migrate.ts` (NEW)
+- Idempotent 7-step schema migration run once at every server startup via `runMigrations()`
+- Uses `columnExists()` / `tableExists()` guards so each step is safe to re-run
+- Steps:
+  1. `ATTENDANCE_LOGS.LEAVE_TYPE VARCHAR(5)` — tracks SL/VL assigned to absent records
+  2. `EMPLOYEE_LEAVES` table — SL/VL balances per employee per year
+  3. `HOLIDAYS` table — holiday date registry
+  4. `ADMINS.ADMIN_ROLE VARCHAR(20) DEFAULT 'ADMIN'`
+  5. `ADMIN_SIGNUP_REQUESTS` table — pending signup queue
+  6. `HOLIDAYS.HOLIDAY_TYPE VARCHAR(30) DEFAULT 'REGULAR'`
+  7. **SuperAdmin bootstrap** — ensures Jonathan Gurap (`EMPLOYEE_ID = 2649694555`) has `ROLE='ADMIN'` in EMPLOYEES and `ADMIN_ROLE='SUPERADMIN'` in ADMINS; unconditional on every startup (UPDATE runs even if the row already exists to guarantee correctness)
 
 ### `db.ts`
-- Firebird connection **pool of 5** via `node-firebird`
-- `lowercase_keys: true` — all column names come back lowercase
+- Firebird connection **pool** via **`odbc`** npm package (DSN-less)
+- Connection string: `Driver={Firebird/InterBase(r) driver};Dbname=host/port:path;Uid=...;Pwd=...;charset=UTF8`
+- Pool: `initialSize: 2`, `maxSize: 5`, `connectionTimeout: 10`
+- `normalizeRows()` — lowercases all column names (Firebird ODBC returns them uppercase), converts Buffer→UTF-8 string, converts BigInt→Number
+- `serializeParams()` — converts JS Date objects to `'YYYY-MM-DD HH:MM:SS'` string format that ODBC expects
 - Exports: `initializeDbPool()`, `query<T>(sql, params)`, `execute(sql, params)`, `getNextAvailableId(table, column)`
-- Has `resolveBlobs()` — BLOB fields in node-firebird return as callback functions; this resolves them to UTF-8 strings before returning rows
-- `getNextAvailableId()` now fills the **lowest missing numeric gap** for manual integer-key tables instead of using `MAX(ID) + 1`
+- `getNextAvailableId()` fills the **lowest missing numeric gap** for manual integer-key tables
 
 ### `config.ts`
 - Reads from `.env`. Key defaults: `PORT=5000`, `DB_DATABASE=C:/Users/JD/Documents/smartqproj/smartqweb/database/ATTENDANCE.FDB`, `DB_USER=SYSDBA`, `DB_PASSWORD=masterkey`, `CORS_ORIGIN=http://localhost:5173`
 
 ### `auth.ts`
-- `signup(employeeIdStr, password)`: Restricted to valid admin signup paths only.
-  - Existing EMPLOYEE_ID may sign up only if its EMPLOYEES.ROLE is already `ADMIN`
-  - First-account bootstrap is still allowed only when there are no rows yet in `ADMIN_CREDENTIALS`
-  - Creates ADMINS + ADMIN_CREDENTIALS rows and returns JWT
-- `login(employeeIdStr, password)`: Verifies EMPLOYEES exists, requires both `ROLE='ADMIN'` and an ADMINS row, checks ADMIN_CREDENTIALS, returns JWT.
-- `verifyAdminPassword(employeeId, password)`: Used by destructive employee delete flow to require second-factor confirmation from the logged-in admin
-- Uses shared numeric parsing from `employeeId.ts` so large IDs are accepted safely as long as they are positive safe integers
+- `generateToken(employeeId, adminRole)` — embeds **both** `employeeId` and `adminRole` in JWT payload
+- `signup(employeeIdStr, password)`:
+  - Any employee found in EMPLOYEES can request signup (no ROLE check)
+  - Checks for duplicate credentials (already has ADMIN_CREDENTIALS) — rejects
+  - Checks if employee is SuperAdmin in ADMINS table — if so, creates account directly (no approval)
+  - Otherwise checks for existing PENDING request and rejects duplicates
+  - For non-SuperAdmin: inserts row into `ADMIN_SIGNUP_REQUESTS` as `PENDING` and returns `{ pending: true }`
+  - Returns `{ success, message, token?, adminRole?, pending? }`
+- `login(employeeIdStr, password)`: Verifies EMPLOYEES exists, requires both an ADMINS row and ADMIN_CREDENTIALS row, checks password, returns `{ token, adminRole }` where `adminRole` comes from `ADMINS.ADMIN_ROLE`
+- `verifyAdminPassword(employeeId, password)`: Used by destructive employee delete flow for second-factor confirmation
 
 ### `employeeId.ts`
 - Central employee ID parsing helper
@@ -173,26 +252,46 @@ CREATE TABLE ATTENDANCE_LOGS (
 - `normalizeEmployeeId(value)` truncates a provided numeric value for controlled updates/inserts
 
 ### `middleware.ts`
-- `authenticate`: Extracts Bearer token from `Authorization` header, verifies JWT. Sets `req.user`. Returns 401 if missing/invalid.
+- `authenticate`: Extracts Bearer token from `Authorization` header, verifies JWT. Sets `req.user = { employeeId, adminRole }`. Returns 401 if missing/invalid.
+- `requireSuperAdmin`: NEW — Returns 403 if `req.user.adminRole !== 'SUPERADMIN'` (case-insensitive). Applied as a second middleware layer on all superadmin routes.
+
+### `superadminRoutes.ts` (NEW)
+- All routes apply `authenticate` + `requireSuperAdmin` as router-level middleware
+- `GET /api/superadmin/requests` — returns all `PENDING` rows from `ADMIN_SIGNUP_REQUESTS` joined with employee name
+- `POST /api/superadmin/requests/:id/approve` — creates ADMINS (with `ADMIN_ROLE='ADMIN'`) + ADMIN_CREDENTIALS rows, marks request `APPROVED`
+- `POST /api/superadmin/requests/:id/reject` — marks request `REJECTED`
 
 ### `employees.ts`
 - Interface: `{ id: number, name: string, role: string, picture: string | null, qrCode: string | null, status: string }`
 - `getAllEmployees()`, `getEmployeeById(id)`, `createEmployee({ id?, name, role? })`, `updateEmployee(id, { employeeId?, name?, role?, picture?, qrCode? })`, `deleteEmployee(id)`
-- Employee creation reuses the **lowest available free EMPLOYEE_ID** unless a manual employee ID is supplied
-- Employee updates can now change `EMPLOYEE_ID`; related rows in ATTENDANCE_LOGS, ADMINS, and ADMIN_CREDENTIALS are migrated to the new ID
-- If an employee ID changes, stored QR code is cleared unless a replacement QR is explicitly supplied
-- Employee deletion is **permanent DB deletion**, not soft delete; it also removes related ATTENDANCE_LOGS, ADMINS, and ADMIN_CREDENTIALS rows
-- Employee IDs are `BIGINT` in DB and are handled in code as positive safe integers
+- Employee creation reuses the **lowest available free EMPLOYEE_ID** unless a manual ID is supplied
+- Employee updates can change `EMPLOYEE_ID`; related rows in ATTENDANCE_LOGS, ADMINS, and ADMIN_CREDENTIALS migrate to the new ID
+- If an employee ID changes, stored QR code is cleared unless a replacement QR is supplied
+- Employee deletion is **permanent DB deletion** — also removes related ATTENDANCE_LOGS, ADMINS, and ADMIN_CREDENTIALS rows
 
 ### `employeeRoutes.ts`
 - All routes require JWT (`authenticate` middleware)
 - `GET /api/employees` — list all
 - `POST /api/employees` — `{ employeeId?, name, role }` → create
 - `PUT /api/employees/:id` — `{ employeeId?, name?, role?, picture?, qrCode? }` → update
-- `DELETE /api/employees/:id` — permanent delete
-  - Requires body `{ password }`
-  - Verifies the currently logged-in admin password before deleting
-- If the logged-in admin changes their own employee ID, the route returns a fresh JWT so the current session stays valid
+- `DELETE /api/employees/:id` — permanent delete; requires body `{ password }` for logged-in admin confirmation
+- If the logged-in admin changes their own employee ID, returns a fresh JWT so current session stays valid
+
+### `leaveRoutes.ts`
+- All routes require JWT
+- `GET /api/leaves` — `?year=YYYY` (default current year); returns all active employees with their SL/VL balances (lazily creates EMPLOYEE_LEAVES row at 15/15 defaults if none exists)
+- `POST /api/leaves/assign` — `{ employeeId, date, leaveType: 'SL' | 'VL' | null }`:
+  - Finds or creates an `ATTENDANCE_LOGS` row for the date with `STATUS='ABSENT'`
+  - Restores the previously assigned leave balance if switching types
+  - Deducts 1 from the chosen leave balance (can go negative intentionally)
+  - `leaveType: null` clears the assignment and restores balance
+- `PATCH /api/leaves/balance` — `{ employeeId, year, slBalance, vlBalance }`: manual override of leave balances (SuperAdmin use)
+
+### `holidayRoutes.ts`
+- All routes require JWT
+- `GET /api/holidays` — returns all holidays as `[{ id, date, name, type }]` ordered by date; `type` defaults to `'REGULAR'` if column is null
+- `POST /api/holidays` — `{ date: 'YYYY-MM-DD', name: string, type: 'REGULAR' | 'SPECIAL_NON_WORKING' | 'SPECIAL_WORKING' }`: inserts holiday, rejects duplicates with 409
+- `DELETE /api/holidays/:id` — removes holiday by ID
 
 ### `kioskRoutes.ts`
 - **No JWT auth** (public kiosk device)
@@ -200,7 +299,7 @@ CREATE TABLE ATTENDANCE_LOGS (
 - `POST /api/kiosk/attendance` — body: `{ employeeId: number | string, action: 'IN' | 'OUT', location: 'OFFICE' | 'ONSITE', site?: string }`
   - **Regular IN (location=OFFICE)**: Inserts new ATTENDANCE_LOGS row with STATUS=NULL. 409 if already clocked in today.
   - **OUT**: Updates TIME_OUT and STATUS=NULL (status computed dynamically). 409 if no clock-in or already clocked out.
-  - **Onsite service (action=IN, location=ONSITE)**: Updates LOCATION and SITE on the **existing** record only — does NOT create a new row. Returns 409 "Employee has not clocked in yet" if no record exists for today. Cannot create a fresh ONSITE record; employee must first scan their RFID (creates OFFICE record), then use Onsite Service to update.
+  - **Onsite service (action=IN, location=ONSITE)**: Updates LOCATION and SITE on the **existing** record only — does NOT create a new row. Returns 409 "Employee has not clocked in yet" if no record exists for today.
   - All STATUS writes are NULL — never stores PENDING/PRESENT/etc.
   - Returns: `{ message, time: Date }`
 - Uses `parseEmployeeId()` instead of raw `parseInt()` so backend ID validation stays consistent with the `BIGINT` migration
@@ -245,11 +344,55 @@ CREATE TABLE ATTENDANCE_LOGS (
 
 ## 7. Web Admin Panel — `smartqweb/src/app/components/`
 
-### `LoginPage.tsx` / `SignUpPage.tsx`
-- POST to `/api/auth/login` and `/api/auth/signup`
-- JWT stored in `localStorage` as `authToken`
-- Non-admin employee IDs are blocked from both login and signup paths
-- API base now comes from `src/imports/api.ts` instead of component-local hardcoded localhost strings
+### Auth flow (localStorage)
+- `authToken` — 24h JWT signed with `{ employeeId, adminRole }`
+- `employeeId` — logged-in admin's employee ID (string)
+- `adminRole` — `'SUPERADMIN'` or `'ADMIN'`; written on login and on SuperAdmin direct signup
+- Cleared together on logout
+
+### `LoginPage.tsx`
+- POST to `/api/auth/login` with `{ employeeId, password }`
+- On success stores `authToken`, `employeeId`, and `adminRole` in localStorage
+- API base from `src/imports/api.ts`
+
+### `SignUpPage.tsx`
+- POST to `/api/auth/signup` with `{ employeeId, password }`
+- If response carries `pending: true` → renders a "Request Submitted, awaiting SuperAdmin approval" screen (no auto-login)
+- If response carries a `token` (SuperAdmin direct signup) → stores credentials and navigates to home
+
+### `Layout.tsx`
+- App shell with sidebar navigation
+- Reads `adminRole` from localStorage; derives `isSuperAdmin = adminRole === 'SUPERADMIN'`
+- **SuperAdmin-only nav items** (only visible when `isSuperAdmin`):
+  - Admin Approval (`/admin-approval`) — Shield icon
+  - Holiday Calendar (`/holidays`) — CalendarDays icon
+  - Leave Manager (`/leave-manager`) — ClipboardList icon
+- Upper-right admin avatar reflects the logged-in admin's `PICTURE` from EMPLOYEES
+
+### `AdminApproval.tsx` (NEW — SuperAdmin only)
+- Fetches pending requests from `GET /api/superadmin/requests`
+- Table columns: Employee ID, Name, Requested At, Actions
+- Per row: **Approve** button → `POST /api/superadmin/requests/:id/approve`; **Reject** button → `POST /api/superadmin/requests/:id/reject`
+- Refreshes the list after each action
+
+### `HolidayManager.tsx` (NEW — SuperAdmin only)
+- Full interactive monthly calendar grid (7-column, prev/next month navigation)
+- **Add holiday**: click an empty day → inline action panel appears with a Type dropdown and Name input; press Enter or click Add
+- **Remove holiday**: click an existing holiday day → shows holiday name + Remove button
+- **Color coding by type**:
+  - Regular → red badge
+  - Special Non-Working → orange badge
+  - Special Working → blue badge
+- Today's date highlighted with a green circle
+- Legend bar at bottom with all 3 holiday types + Today marker
+- Calls `GET /api/holidays` on mount; `POST /api/holidays` to add; `DELETE /api/holidays/:id` to remove
+
+### `LeaveManager.tsx` (NEW — SuperAdmin only)
+- Year selector + employee search/filter
+- Table showing all active employees with SL and VL balances for the selected year
+- Per-row inline edit mode: click Edit → numeric inputs for SL and VL → Save calls `PATCH /api/leaves/balance` / Cancel discards
+- Negative balances shown in red
+- Calls `GET /api/leaves?year=YYYY` on mount/year change
 
 ### `EmployeeList.tsx`
 - Fetches `GET /api/employees`, displays table with columns: Employee ID, Name, Role, Photo, QR Code, Status
@@ -311,18 +454,19 @@ CREATE TABLE ATTENDANCE_LOGS (
 - Verified correct — calls `GET /api/kiosk/employee/:id` then `POST /api/kiosk/attendance` with `action: 'OUT'`
 - No mock/localStorage code
 
-### `Layout.tsx`
-- App shell with sidebar navigation
-- Upper-right admin avatar now reflects the logged-in admin's `PICTURE` from EMPLOYEES and refreshes after photo changes in EmployeeList
-- Uses the current `picture` field shape, not the older `profilePicture` name
+### `routes.tsx`
+- Declares all page routes using React Router
+- Added three new routes:
+  - `/admin-approval` → `AdminApproval`
+  - `/holidays` → `HolidayManager`
+  - `/leave-manager` → `LeaveManager`
 
 ---
 
 ## 8. Kiosk App — `attendance-system/src/app/components/KioskHome.tsx`
 
 - All localStorage/mock data removed. Fully API-driven.
-- API base is environment-driven through `attendance-system/src/imports/api.ts`
-- Default dev fallback remains `http://localhost:5000/api/kiosk`
+- API base resolved at runtime from `window.kioskConfig.serverUrl` (set by preload from userData/config.json), then env vars, then `http://localhost:5000/api/kiosk`
 - Screen states: `home`, `success`, `manual-logout`, `onsite-service`
 - **Main scan flow** (home screen):
   - RFID reader emulates keyboard → input has `autoFocus` + `Enter` key submit
@@ -331,22 +475,38 @@ CREATE TABLE ATTENDANCE_LOGS (
   - If response is 409 "Already clocked in today" → automatically retries with `action: 'OUT', location: 'OFFICE'`
   - Success screen shows employee name, employee picture (base64 from DB, or User icon fallback)
 - **Manual logout screen**: Separate ID input → `POST /api/kiosk/attendance` with `action: 'OUT', location: 'OFFICE'` directly
-- **Onsite service screen**:
-  - Inputs: Employee ID + Site name only (no time fields — time is not set here)
-  - Calls `POST /api/kiosk/attendance` with `{ action: 'IN', location: 'ONSITE', site: onsiteSite }`
-  - This is an **update-only** operation — it updates LOCATION and SITE on an existing record; it does NOT create a new attendance row
-  - Returns 409 if the employee has not yet clocked in today (they must tap their RFID card first)
-  - Success screen shows: "LOCATION UPDATED TO ONSITE" + site name
+- **Onsite service screen**: Inputs: Employee ID + Site name. Calls `POST /api/kiosk/attendance` with `{ action: 'IN', location: 'ONSITE', site }`. Update-only — returns 409 if not clocked in today.
 - Clock in top-left, date below it, company logo
-- Auto-reset to home after success (timeout)
-- Electron dev wiring has been corrected to use the kiosk Vite port `5174`, and `electron:dev` now attaches to an already-running kiosk dev server instead of starting a second Vite instance
-- The kiosk is still a development flow until packaged; production installer/distribution is still pending
 
-> NOTE: The kiosk flow is implemented and testable by typed ID input, but it has **not yet been validated against a real RFID reader device** in this handoff phase.
+### Electron Main (`electron/main.cjs`)
+
+- Detects packaged vs dev via `!app.isPackaged`
+- **Reads `userData/config.json`** for `serverUrl` at runtime (no rebuild needed to change server IP)
+- Writes a default `config.json` on first launch if none exists
+- Passes `--kiosk-server-url=<serverUrl>` via `additionalArguments` to the renderer
+- Preload: `electron/preload.cjs` exposes `window.kioskConfig = { serverUrl }` via `contextBridge`
+- Window: `kiosk: true`, `fullscreen: true`, `frame: false`
+
+### Kiosk Server URL Configuration (target PC)
+
+Edit `C:\Users\<user>\AppData\Roaming\Attendance Kiosk\config.json`:
+```json
+{ "serverUrl": "http://192.168.1.100:5000" }
+```
+Restart the kiosk app. No rebuild required.
+
+### Packaging
+
+- **Built installer**: `release/Attendance Kiosk Setup 0.0.1.exe` (~80 MB NSIS installer)
+- Build command: `npm run electron:build` (in `attendance-system/`)
+- NSIS config: `oneClick: false`, creates Desktop + Start Menu shortcuts
+- Icon: `assets/logo.ico` generated from `src/assets/logo.png` (padded to square by `generate-icon.js`)
+
+> NOTE: The kiosk flow works in typed-input testing. **Real RFID reader validation is still pending** against actual hardware.
 
 ---
 
-## 9. What Is Fully Completed
+## 10. What Is Fully Completed
 
 - [x] Firebird connection layer (`db.ts`) with pool, BLOB resolver, typed query/execute helpers
 - [x] All employee CRUD wired to DB (no flat files)
@@ -369,190 +529,195 @@ CREATE TABLE ATTENDANCE_LOGS (
 - [x] Employee deletion now permanently removes rows from DB and reuses freed employee IDs on later inserts
 - [x] Employee delete requires second confirmation via admin password re-entry
 - [x] Admin avatar in web header reflects the admin employee photo from DB
-- [x] Admin auth hardened so non-admin employee IDs cannot gain access through login or signup
 - [x] Employee IDs expanded to `BIGINT` in source schema and live Firebird DB
 - [x] Shared employee ID parsing added across auth, employee, kiosk, and attendance routes
 - [x] Manual employee ID insert/edit support added in EmployeeList and backend
 - [x] Frontend API bases moved to env-backed helpers instead of hardcoded localhost strings
 - [x] QR generation, persistence, preview, and printing added to EmployeeList
 - [x] Live DB migration to add `EMPLOYEES.QR_CODE` completed and verified
+- [x] **RBAC system**: `ADMINS.ADMIN_ROLE` distinguishes `'ADMIN'` from `'SUPERADMIN'`
+- [x] **JWT now carries `adminRole`**: `generateToken(employeeId, adminRole)` embeds both fields
+- [x] **SuperAdmin bootstrap**: Jonathan Gurap (ID `2649694555`) unconditionally ensured as SUPERADMIN on every server start via `migrate.ts` step 7
+- [x] **`migrate.ts`**: 7 idempotent migration steps run at server startup
+- [x] **Admin signup approval flow**: non-SuperAdmin signups go to `ADMIN_SIGNUP_REQUESTS` as PENDING; SuperAdmin direct-signup bypasses approval
+- [x] **`requireSuperAdmin` middleware**: 403 if caller is not SUPERADMIN
+- [x] **`superadminRoutes.ts`**: list/approve/reject pending signup requests
+- [x] **`AdminApproval.tsx`**: SuperAdmin-only UI for approving/rejecting pending admin signups
+- [x] **`HolidayManager.tsx`**: interactive monthly calendar; click to add/remove holidays; 3 types (Regular/Special Non-Working/Special Working) with color coding; today highlighted; legend bar
+- [x] **`LeaveManager.tsx`**: year selector + per-employee SL/VL balance display; inline edit with Save/Cancel; calls `PATCH /api/leaves/balance`
+- [x] **`leaveRoutes.ts`**: SL/VL balance read + assign (deducts balance, restores on type change) + manual balance override
+- [x] **`holidayRoutes.ts`**: GET/POST/DELETE with `HOLIDAY_TYPE` support (3 types)
+- [x] Layout conditional SuperAdmin nav items (Admin Approval, Holiday Calendar, Leave Manager)
+- [x] **ODBC migration**: backend moved from `node-firebird` to `odbc` package; DSN-less connection; handles uppercase column names, Buffer/BigInt normalization
+- [x] **Generate Reports** date range fix: `GET /api/attendance?dateFrom=...&dateTo=...` now used
+- [x] **Generate Reports** PDF print: `window.open()` new blank window; A4 landscape HTML (header, table, stat cards, signature block)
+- [x] **Single-port production runtime**: `NODE_ENV=production` → Express serves `dist/` + catch-all; `.env.production` sets `VITE_API_BASE_URL=/api`; `build:prod` + `start:prod` scripts; verified ✅
+- [x] **Electron kiosk packaged**: `release/Attendance Kiosk Setup 0.0.1.exe` (~80 MB NSIS); runtime server URL from `userData/config.json`; preload exposes `window.kioskConfig.serverUrl`; icon fixed
 
----
+## 9. Mobile App — `mob_attendance/`
 
-## 10. Pending Tasks
+Flutter app cloned from `https://github.com/matthewcandoy/mob_attendance`.
+
+**Current state: standalone / NOT connected to the Express API.**
+- `lib/main.dart` uses `SharedPreferences` for local storage only
+- No HTTP package, no API calls — all attendance data lives on-device
+- Imports: `image_picker`, `intl`, `shared_preferences`
+
+**Next task**: Wire the Flutter app to the Express backend.
+- Purpose: employees time in/out remotely (not physically at the kiosk)
+- Same API endpoints as the kiosk (`/api/kiosk/*`) — no new backend routes should be needed
+- Need to add `http` or `dio` package to `pubspec.yaml`
+- Need to add a server URL configuration screen (or a `config.dart` constant) pointing to the Express server IP/port
+- Auth model: same employee ID lookup flow as the kiosk (no JWT needed for time in/out)
+- This is why ODBC was chosen as the DB driver — same Firebird DB, same Express API, multiple clients
 
 The system is feature-complete enough for core attendance use, but these are the important remaining items before calling deployment finished.
 
-### STEP — Real RFID Validation
+### STEP — Generate Reports (PDF / Print)
 
-The kiosk flow works in code and in typed-input testing, but real scanner behavior is still not locked down.
+This is the next major feature to implement.
 
-Validation still needed:
-1. Test with the actual RFID reader in keyboard-emulation mode
-2. Confirm suffix behavior such as automatic `Enter`, timing, and focus stability
-3. Confirm whether the raw scanned identifier should remain a numeric employee ID or whether a separate RFID/string field is needed
+## 11. Pending Tasks
 
-Important current behavior:
-1. The backend now validates IDs through `parseEmployeeId()` rather than loose `parseInt()` usage
-2. Employee IDs are still treated as numeric values even after the `BIGINT` migration
-3. Leading-zero RFID strings are still a business-rule decision, not yet finalized
+The system is feature-complete for core attendance use. The main remaining work is wiring the mobile app and deploying to the target PC.
 
-### STEP — QR Scanner Validation
+### STEP — Wire Flutter Mobile App to Express API
 
-Admin-side QR generation/storage is already implemented. What is still pending is validating how the target QR scanner behaves and whether kiosk-side scanning should read:
+**Priority: next major task.**
 
-1. Plain employee ID only
-2. A richer payload in the future
+`mob_attendance/` is cloned but currently uses `SharedPreferences` for local storage (fully offline, no server calls).
 
-The safest current assumption is to keep QR payloads as employee ID only until the target scanner hardware is tested.
+What needs to be done:
+1. Add `http` or `dio` package to `pubspec.yaml`
+2. Replace local SharedPreferences logic with API calls to `http://SERVER_IP:5000/api/kiosk/*`
+   - Employee lookup: `GET /api/kiosk/employee/:id`
+   - Time in/out: `POST /api/kiosk/attendance` with `{ employeeId, action: 'IN'|'OUT', location: 'OFFICE'|'ONSITE', site? }`
+3. Add a server URL configuration screen (or a `config.dart` constant) so the mobile app knows the server IP
+4. No new backend routes needed — kiosk endpoints are already public (no JWT)
 
-### STEP — Single-Port Admin Runtime
+### STEP — Real RFID / QR Hardware Validation
 
-This is the main remaining web deployment task.
+Kiosk and QR work in typed-input testing but real hardware not yet validated:
+1. Test RFID reader in keyboard-emulation mode (confirm Enter suffix, timing, focus stability)
+2. Test QR scanner against generated QR codes
+3. Decide if leading-zero RFID strings need a separate field (currently numeric only)
 
-Goal:
-1. Visiting one localhost port on the target PC should open the working admin app
-2. No separate Vite frontend terminal should be needed in production
+### STEP — Target-PC Deployment
 
-Target shape:
-1. Build `smartqweb`
-2. Serve its built assets from the Express backend in production
-3. Keep development mode split as it is today, but collapse production into one backend-served runtime
-
-### STEP — Packaged Kiosk Application
-
-This is the main remaining kiosk deployment task.
-
-Goal:
-1. The kiosk should run like a normal installed app
-2. The user should not need VS Code or a dev server to open it
-
-Current status:
-1. Electron dev flow is fixed
-2. `npm run electron:build` exists
-3. Production packaging and target-PC validation are still pending
-
-### STEP — Laptop To Target-PC Transition
-
-This deployment handoff is still partially procedural and should be treated as active remaining work.
-
-Target-PC checklist:
-1. Install Node.js
-2. Install Firebird 5 and apply the same `firebird.conf` compatibility changes
-3. Copy the working `ATTENDANCE.FDB` with its populated employee/admin data
-4. Copy the application repositories or release artifacts
-5. Configure production API base values for the kiosk and admin runtime
-6. Run the backend as the host process for the admin app
-7. Install the packaged kiosk app on the kiosk machine
-
-The intended end state is:
-1. Admin app: one port, one backend process
-2. Kiosk app: one installed application
-3. Database: copied with the existing employee/RFID data already loaded
-4. No requirement to manually open four development terminals on the destination system
-
-### STEP — End-to-End Smoke Test
-
-Before running, if inheriting an old DB, reset stored statuses:
-```sql
-UPDATE ATTENDANCE_LOGS SET STATUS = NULL;
-COMMIT;
-```
-
-Test checklist:
-1. Start the current development stack:
-   - `cd smartqweb/server && npm run dev`
-   - `cd smartqweb && npm run dev`
-   - `cd attendance-system && npm run dev`
-2. Verify admin login/signup still works only for admin-role employees
-3. Add or edit an employee with manual ID, photo, and QR generation
-4. On kiosk, scan/type the employee ID and verify IN then OUT flow
-5. Verify SearchAttendance and GenerateReports show correct status, location, site, and late-state behavior
-6. Verify printed QR scans correctly with intended hardware
+Checklist for the target production PC:
+1. Install Node.js (LTS)
+2. Install Firebird 5 (SuperServer)
+3. Install Firebird ODBC driver (64-bit) — no firebird.conf changes needed
+4. Copy `ATTENDANCE.FDB` with existing employee/admin data
+5. Copy repo (or just the `smartqweb/` folder + `release/` installer)
+6. Create `smartqweb/server/.env` with correct `DB_DATABASE` path and `JWT_SECRET`
+7. Run `npm run build:prod` in `smartqweb/`
+8. Run `npm run start:prod` in `smartqweb/` → admin app at `http://localhost:5000`
+9. Install `release/Attendance Kiosk Setup 0.0.1.exe` on the kiosk machine
+10. Edit `AppData\Roaming\Attendance Kiosk\config.json` → set `serverUrl` to the server PC's IP
 
 ### STEP — Facial Recognition
 
-Facial recognition is intentionally last.
-
-Do not begin it until:
-1. single-port admin deployment is done
-2. packaged kiosk deployment is done
-3. real RFID and QR hardware behavior are validated
-4. the copied database flow on the target PC is stable
+Do not begin until RFID/QR hardware is validated and the target PC deployment is stable. This is intentionally last.
 
 ---
 
-## 11. Known Issues & Gotchas
+## 12. Known Issues & Gotchas
 
-1. **Firebird WireCrypt**: If server throws `gdscode 335544472` ("username and password not defined"), the `firebird.conf` fix was not applied or the service was not restarted.
+1. **ODBC driver must be installed**: If server fails to connect, the Firebird ODBC driver is not installed on this machine. Download and install from https://firebirdsql.org/en/odbc-driver/ (64-bit). No DSN entry needed.
 
-2. **BLOB resolver**: `node-firebird` returns BLOB columns as async callback functions, not values. The `resolveBlobs()` function in `db.ts` handles this. Any new query returning a BLOB column (like `PICTURE`) must go through `query()` which already calls `resolveBlobs`.
+2. **Uppercase column names**: Firebird ODBC returns column names in UPPERCASE. `normalizeRows()` in `db.ts` lowercases them. All route code expects lowercase.
 
-3. **IDs are still managed manually**: No SEQUENCE/GENERATOR is used. The code now uses shared gap-filling logic through `getNextAvailableId()` so the lowest missing numeric ID is reused. This is still not race-safe, but acceptable for the current single-office deployment model.
+3. **BLOB columns come back as Buffer**: `normalizeRows()` converts Buffer→UTF-8 string automatically.
 
-4. **STATUS = NULL migration**: If you inherit a DB where rows already have STATUS = 'PENDING', 'PRESENT', etc. (written by the old code), the dynamic `computeStatus()` will be skipped for those rows because non-null STATUS is treated as an admin override. Run this in isql before testing:
+4. **BigInt columns**: Firebird BIGINT returns as JS `BigInt`. `normalizeRows()` converts to `Number`. `JSON.stringify` would fail on raw `BigInt`.
+
+5. **Date params to ODBC**: Use `serializeParams()` in `db.ts` — converts JS Date to `'YYYY-MM-DD HH:MM:SS'` string before binding.
+
+6. **IDs are still managed manually**: No SEQUENCE/GENERATOR. `getNextAvailableId()` fills lowest available gap. Not race-safe, acceptable for single-office.
+
+7. **STATUS = NULL convention**: Deliberately NULL for all kiosk-written records. `computeStatus()` derives at query time. Non-null STATUS = admin override. If inheriting old DB:
    ```sql
    UPDATE ATTENDANCE_LOGS SET STATUS = NULL;
    COMMIT;
    ```
 
-5. **ONSITE requires prior clock-in**: Onsite Service cannot create an attendance record from scratch. The employee must first tap their RFID card (creating an OFFICE record), then use Onsite Service to update LOCATION/SITE. If they've never clocked in today, Onsite Service returns 409.
+8. **ONSITE requires prior clock-in**: 409 returned if no attendance record exists for today.
 
-6. **ONSITE employees never get OVERTIME**: `computeStatus()` caps effective TIME_OUT at 17:00 for ONSITE records, so extra hours are silently absorbed. This is by design.
+9. **ONSITE never gets OVERTIME**: `computeStatus()` caps TIME_OUT at 17:00 for ONSITE by design.
 
-7. **Past-date ONSITE with no TIME_OUT**: `computeStatus()` uses 17:00 as the effective TIME_OUT for past-date ONSITE records that are still open (NULL TIME_OUT). The DB record is not updated — this is purely a display-time computation.
+10. **Past-date ONSITE with no TIME_OUT**: 17:00 used as effective TIME_OUT for display only. DB not modified.
 
-8. **JWT stored in localStorage**: Cleared on browser close. If an admin gets logged out unexpectedly, they need to log in again. This is acceptable for the current use case.
+11. **JWT in localStorage**: Cleared on browser close. Admins need to re-login after session ends.
 
-9. **Duplicate stale code bug**: When editing component files, be careful not to leave old function implementations or `return` statements after the component's closing `}`. This has been a recurring issue — always check for orphaned code after edits. Pattern to fix: find the duplicate declaration line with `Select-String`, truncate with `$lines[0..N] | Set-Content`.
+12. **Duplicate stale code**: After large edits, check for orphaned code (extra `return` statements, duplicate function bodies after closing `}`).
 
-10. **Electron dev startup model**: `attendance-system` kiosk runs on port **5174**. Current `electron:dev` expects the kiosk Vite dev server to already be running, then launches Electron against it.
+13. **Electron dev port**: Kiosk Vite dev server runs on **5174**. `electron:dev` expects it already running.
 
-11. **Permanent employee deletion**: Deleting an employee now removes related attendance logs and admin credential/admin rows. This is intentional but destructive; do not assume old soft-delete semantics.
+14. **Permanent employee deletion**: Also removes related ATTENDANCE_LOGS, ADMINS, ADMIN_CREDENTIALS rows.
 
-12. **Admin avatar source**: The web header avatar reads from EMPLOYEES.PICTURE via `/api/employees`, not from a separate profile store.
+15. **SuperAdmin bootstrap is unconditional**: `migrate.ts` step 7 always ensures Jonathan Gurap (ID `2649694555`) is SUPERADMIN on every server start.
 
-13. **Module resolution**: Server uses `"type": "module"` in `package.json` so all imports must use `.js` extensions (e.g. `import { query } from './db.js'` even though the source file is `.ts`). TypeScript handles this via `moduleResolution: node`.
+16. **adminRole must be in localStorage**: If missing, user is treated as ADMIN with no SuperAdmin nav. Fix: log out and log back in.
 
-14. **Generated files should not be committed**: `node_modules/`, `dist/`, and local DB backup `.bak` files are local artifacts. Keep repo commits focused on source, migration scripts, and documentation.
+17. **Module resolution**: Server uses ESM. Imports must use `.js` extensions even for `.ts` source files.
 
-15. **Live DB transfer is separate from source control**: the working `ATTENDANCE.FDB` is part of deployment handoff data, not something to rely on as the primary transport mechanism inside git history.
+18. **Mobile app is offline-only**: `mob_attendance/lib/main.dart` uses `SharedPreferences` only. NOT connected to API. Integration is the next major task.
 
 ---
 
-## 12. File Tree Reference
+## 13. File Tree Reference
 
 ```
 smartqweb/
+├── .env.production                 ← VITE_API_BASE_URL=/api (for production build)
 ├── server/
-│   ├── .env                        ← DB path, JWT secret, PORT=5000
-│   ├── package.json                ← "dev": "tsx src/index.ts"
+│   ├── .env                        ← DB path, JWT secret, PORT=5000 (create on target PC)
+│   ├── package.json                ← "start": "NODE_ENV=production node dist/index.js"
 │   ├── tsconfig.json
 │   └── src/
-│       ├── index.ts                ← App entrypoint, registers all routers
+│       ├── index.ts                ← App entrypoint; in production serves dist/ + catch-all
 │       ├── config.ts               ← Reads .env, exports config object
-│       ├── db.ts                   ← node-firebird pool, query/execute, resolveBlobs
-│       ├── auth.ts                 ← signup, login, generateToken, verifyToken
-│       ├── middleware.ts           ← authenticate (JWT middleware)
-│       ├── routes.ts               ← /api/auth router (signup, login)
+│       ├── db.ts                   ← ODBC pool, normalizeRows, serializeParams, query/execute
+│       ├── migrate.ts              ← 7-step idempotent migrations (run at startup)
+│       ├── auth.ts                 ← signup (pending flow), login (returns adminRole), generateToken
+│       ├── middleware.ts           ← authenticate + requireSuperAdmin
+│       ├── routes.ts               ← /api/auth router
 │       ├── employees.ts            ← Employee interface + DB functions
 │       ├── employeeRoutes.ts       ← /api/employees CRUD (JWT required)
-│       ├── kioskRoutes.ts          ← /api/kiosk (no JWT)
-│       └── attendanceRoutes.ts     ← /api/attendance (JWT required)
+│       ├── employeeId.ts           ← Shared BIGINT ID parsing helpers
+│       ├── kioskRoutes.ts          ← /api/kiosk (no JWT — used by kiosk AND mobile app)
+│       ├── attendanceRoutes.ts     ← /api/attendance (JWT required)
+│       ├── leaveRoutes.ts          ← /api/leaves (GET, POST /assign, PATCH /balance)
+│       ├── holidayRoutes.ts        ← /api/holidays (GET, POST, DELETE)
+│       └── superadminRoutes.ts     ← /api/superadmin/requests (list/approve/reject)
 ├── database/
 │   ├── ATTENDANCE.FDB              ← ACTUAL database
-│   └── schema.sql                  ← Reference schema (keep in sync with .fdb)
-└── src/app/components/
-    ├── Layout.tsx
-    ├── LoginPage.tsx
-    ├── SignUpPage.tsx
-    ├── EmployeeList.tsx            ← DONE: full CRUD + photo upload
-    ├── TimeInOut.tsx               ← DONE: admin manual entry form (POST /api/attendance/admin)
-    ├── SearchAttendance.tsx        ← DONE: loads from API, live filter, isLate, status colors
-    ├── GenerateReports.tsx         ← DONE: fetches from API, CSV (BOM + human date) + print
-    └── ManualLogout.tsx            ← DONE: verified correct (admin JWT flow)
+│   └── schema.sql                  ← Reference schema
+└── src/app/
+    ├── routes.tsx
+    └── components/
+        ├── Layout.tsx
+        ├── LoginPage.tsx
+        ├── SignUpPage.tsx
+        ├── EmployeeList.tsx
+        ├── TimeInOut.tsx
+        ├── SearchAttendance.tsx
+        ├── GenerateReports.tsx     ← PDF via window.open() new window
+        ├── ManualLogout.tsx
+        ├── AdminApproval.tsx
+        ├── HolidayManager.tsx
+        └── LeaveManager.tsx
 
 attendance-system/
+├── electron/
+│   ├── main.cjs                    ← Reads userData/config.json for serverUrl
+│   └── preload.cjs                 ← Exposes window.kioskConfig.serverUrl
+├── release/
+│   └── Attendance Kiosk Setup 0.0.1.exe   ← ~80 MB NSIS installer
 └── src/app/components/
-    └── KioskHome.tsx               ← DONE: RFID-ready, full API flow
+    └── KioskHome.tsx
+
+mob_attendance/                     ← Flutter mobile app (NOT yet wired to API)
+└── lib/main.dart                   ← Uses SharedPreferences only; integration pending
 ```
