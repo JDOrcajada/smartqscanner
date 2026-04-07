@@ -77,7 +77,6 @@ export function Layout() {
     { path: "/monthly", label: "Monthly Records", icon: BarChart2 },
     { path: "/reports", label: "Generate Reports", icon: FileText },
     { path: "/employees", label: "Employee List", icon: Users },
-    { path: "/logout", label: "Manual Logout", icon: LogOut },
     ...(isSuperAdmin
       ? [
           { path: "/admin-approval", label: "Admin Approval", icon: UserCheck },
@@ -85,6 +84,7 @@ export function Layout() {
           { path: "/leave-manager", label: "Leave Manager", icon: BadgeCheck },
         ]
       : []),
+    { path: "/logout", label: "Manual Logout", icon: LogOut },
   ];
 
   return (

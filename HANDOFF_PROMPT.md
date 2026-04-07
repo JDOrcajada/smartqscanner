@@ -2,7 +2,7 @@
 
 You are continuing development on a **SmartQ Attendance System** project. This document contains the complete context of what has been built, the exact current state of every key file, and the specific next tasks to implement. Read everything before touching any code.
 
-> Last updated: April 6, 2026 — Single-port production runtime, Electron kiosk packaging complete, mobile Flutter app cloned.
+> Last updated: April 7, 2026 — Mobile Flutter app fully wired to API, Sunday auto-absent immunity confirmed, Manual Logout moved to bottom of nav, DB cleaned for deployment practice.
 
 ---
 
@@ -22,8 +22,8 @@ C:\Users\JD\Documents\smartqproj\
 │   ├── electron/main.cjs        ← Electron main process
 │   ├── electron/preload.cjs     ← Exposes window.kioskConfig.serverUrl
 │   └── release/                 ← Built installer (Attendance Kiosk Setup 0.0.1.exe)
-└── mob_attendance/     ← Flutter mobile app (cloned, NOT yet connected to API)
-    └── lib/main.dart            ← Currently uses local SharedPreferences only
+└── mob_attendance/     ← Flutter mobile app (fully wired to Express API)
+    └── lib/main.dart            ← API-driven; Settings screen for server URL; zero Dart errors
 ```
 
 ---
@@ -553,47 +553,46 @@ Restart the kiosk app. No rebuild required.
 - [x] **Generate Reports** PDF print: `window.open()` new blank window; A4 landscape HTML (header, table, stat cards, signature block)
 - [x] **Single-port production runtime**: `NODE_ENV=production` → Express serves `dist/` + catch-all; `.env.production` sets `VITE_API_BASE_URL=/api`; `build:prod` + `start:prod` scripts; verified ✅
 - [x] **Electron kiosk packaged**: `release/Attendance Kiosk Setup 0.0.1.exe` (~80 MB NSIS); runtime server URL from `userData/config.json`; preload exposes `window.kioskConfig.serverUrl`; icon fixed
+- [x] **Flutter mobile app wired**: complete rewrite of `lib/main.dart`; `http` package; Settings screen for runtime server URL; IN→OUT fallback; Onsite 2-field flow; base64 photo decode; zero Dart errors
+- [x] **Sunday auto-absent immunity confirmed**: `isWeekend()` in `attendanceRoutes.ts` already covers `day === 0` (Sunday) and `day === 6` (Saturday) — no code change needed
+- [x] **Manual Logout moved to bottom of nav**: now appears after all SuperAdmin items for both Admin and SuperAdmin roles
+- [x] **DB cleaned for deployment practice**: ATTENDANCE_LOGS, EMPLOYEE_LEAVES, HOLIDAYS, ADMIN_SIGNUP_REQUESTS all cleared; EMPLOYEES (5), ADMINS (2), ADMIN_CREDENTIALS (2) preserved
 
 ## 9. Mobile App — `mob_attendance/`
 
-Flutter app cloned from `https://github.com/matthewcandoy/mob_attendance`.
+Flutter app originally cloned from `https://github.com/matthewcandoy/mob_attendance`.
 
-**Current state: standalone / NOT connected to the Express API.**
-- `lib/main.dart` uses `SharedPreferences` for local storage only
-- No HTTP package, no API calls — all attendance data lives on-device
-- Imports: `image_picker`, `intl`, `shared_preferences`
+**Current state: FULLY WIRED to the Express API. Zero Dart analysis errors.**
 
-**Next task**: Wire the Flutter app to the Express backend.
-- Purpose: employees time in/out remotely (not physically at the kiosk)
-- Same API endpoints as the kiosk (`/api/kiosk/*`) — no new backend routes should be needed
-- Need to add `http` or `dio` package to `pubspec.yaml`
-- Need to add a server URL configuration screen (or a `config.dart` constant) pointing to the Express server IP/port
-- Auth model: same employee ID lookup flow as the kiosk (no JWT needed for time in/out)
-- This is why ODBC was chosen as the DB driver — same Firebird DB, same Express API, multiple clients
+### Architecture (`lib/main.dart` — ~770 lines)
 
-The system is feature-complete enough for core attendance use, but these are the important remaining items before calling deployment finished.
+- `getServerUrl()` / `saveServerUrl()` — reads/writes server URL from SharedPreferences (key: `serverUrl`, default: `http://192.168.1.1:5000`)
+- `fetchEmployee(serverUrl, empId)` — `GET /api/kiosk/employee/:id`
+- `postAttendance(serverUrl, {employeeId, action, location, site?})` — `POST /api/kiosk/attendance`
+- `_submitManualId()` — tries IN, if 409 retries with OUT (same pattern as Electron kiosk)
+- `_submitOnsite()` — 2 fields only (Employee ID + Site), no time fields
+- Settings screen (⚙️ gear icon) — lets user type server IP, saves to SharedPreferences
+- Success screen — decodes base64 photo from DB (`MemoryImage`), shows name/role/ID/time
 
-### STEP — Generate Reports (PDF / Print)
+### Screens
+`AppView.home`, `AppView.success`, `AppView.manualInput`, `AppView.onsiteService`, `AppView.settings`
 
-This is the next major feature to implement.
+### pubspec.yaml dependencies
+- `http: ^1.2.0` ← added
+- `intl: ^0.19.0` ← kept
+- `shared_preferences: ^2.2.0` ← kept (for server URL only)
+- `image_picker` ← removed
+
+### Internet access (not yet implemented — easy to add later)
+The Settings screen accepts any URL. To expose the server to the internet after deployment:
+- **ngrok** (dev/testing): `ngrok http 5000` → paste the printed URL in mobile Settings
+- **Port forwarding + DuckDNS** (permanent): forward router port 5000 → Target PC; set up DuckDNS for stable hostname
+- **Cloudflare Tunnel** (no router access needed): `cloudflared tunnel run --url http://localhost:5000 smartq`
+No code changes needed for any of these — just update the URL in mobile Settings.
 
 ## 11. Pending Tasks
 
-The system is feature-complete for core attendance use. The main remaining work is wiring the mobile app and deploying to the target PC.
-
-### STEP — Wire Flutter Mobile App to Express API
-
-**Priority: next major task.**
-
-`mob_attendance/` is cloned but currently uses `SharedPreferences` for local storage (fully offline, no server calls).
-
-What needs to be done:
-1. Add `http` or `dio` package to `pubspec.yaml`
-2. Replace local SharedPreferences logic with API calls to `http://SERVER_IP:5000/api/kiosk/*`
-   - Employee lookup: `GET /api/kiosk/employee/:id`
-   - Time in/out: `POST /api/kiosk/attendance` with `{ employeeId, action: 'IN'|'OUT', location: 'OFFICE'|'ONSITE', site? }`
-3. Add a server URL configuration screen (or a `config.dart` constant) so the mobile app knows the server IP
-4. No new backend routes needed — kiosk endpoints are already public (no JWT)
+The system is feature-complete for core attendance use. Remaining work is hardware validation, target PC deployment, and facial recognition.
 
 ### STEP — Real RFID / QR Hardware Validation
 
@@ -602,23 +601,262 @@ Kiosk and QR work in typed-input testing but real hardware not yet validated:
 2. Test QR scanner against generated QR codes
 3. Decide if leading-zero RFID strings need a separate field (currently numeric only)
 
-### STEP — Target-PC Deployment
+### STEP — Mobile Internet Access (post-deployment, no code change)
 
-Checklist for the target production PC:
-1. Install Node.js (LTS)
-2. Install Firebird 5 (SuperServer)
-3. Install Firebird ODBC driver (64-bit) — no firebird.conf changes needed
-4. Copy `ATTENDANCE.FDB` with existing employee/admin data
-5. Copy repo (or just the `smartqweb/` folder + `release/` installer)
-6. Create `smartqweb/server/.env` with correct `DB_DATABASE` path and `JWT_SECRET`
-7. Run `npm run build:prod` in `smartqweb/`
-8. Run `npm run start:prod` in `smartqweb/` → admin app at `http://localhost:5000`
-9. Install `release/Attendance Kiosk Setup 0.0.1.exe` on the kiosk machine
-10. Edit `AppData\Roaming\Attendance Kiosk\config.json` → set `serverUrl` to the server PC's IP
+The mobile app Works on local WiFi today. To enable remote access after deployment, pick one:
+- **ngrok**: `ngrok http 5000` → paste printed URL into mobile Settings → done (URL changes on restart)
+- **Port forwarding + DuckDNS**: forward router port 5000 → Target PC IP; register free hostname at duckdns.org
+- **Cloudflare Tunnel**: `cloudflared tunnel run --url http://localhost:5000 smartq` (no router access needed)
+No code changes required for any option.
 
 ### STEP — Facial Recognition
 
 Do not begin until RFID/QR hardware is validated and the target PC deployment is stable. This is intentionally last.
+
+---
+
+## 12A. Target PC Transition Guide (Detailed)
+
+This is a complete step-by-step guide to moving the system from the development machine to the target production PC (Admin PC) and Mini PC (kiosk).
+
+---
+
+### Prerequisites — Install on the Admin PC (Target Server Machine)
+
+#### 1. Node.js LTS
+- Download from https://nodejs.org → choose the LTS version
+- Run the installer, keep all defaults
+- Verify: open PowerShell → `node -v` and `npm -v` should both print version numbers
+
+#### 2. Firebird 5 SuperServer
+- Download from https://firebirdsql.org/en/firebird-5-0/ (Windows 64-bit installer)
+- Install with defaults — choose **SuperServer** when asked
+- After install, Firebird service should run automatically
+- Verify: open Services (`services.msc`) → look for **Firebird Server** → Status: Running
+
+#### 3. Firebird ODBC Driver (64-bit — CRITICAL)
+- Download from https://firebirdsql.org/en/odbc-driver/
+- File: `Firebird_ODBC_*_x64.exe` (64-bit, must match Node.js which is 64-bit)
+- Install with defaults
+- Verify: open **ODBC Data Source Administrator (64-bit)** → Drivers tab → `Firebird/InterBase(r) driver` must be listed
+- If NOT listed, `npm run start:prod` will fail with a connection error
+
+#### 4. Git (optional but recommended)
+- Download from https://git-scm.com
+- Lets you clone directly instead of copying files manually
+
+---
+
+### Step 1 — Copy the Repository to the Admin PC
+
+**Option A — Git clone (recommended)**
+```powershell
+cd C:\AttendanceSystem
+git clone git@github.com:JDOrcajada/smartqweb.git
+```
+This creates `C:\AttendanceSystem\smartqweb\`.
+
+**Option B — Manual copy**
+- Copy the entire `smartqweb/` folder from the dev machine to the Admin PC
+- Destination: anywhere, e.g. `C:\AttendanceSystem\smartqweb\`
+
+---
+
+### Step 2 — Copy the Database File
+
+- Copy `smartqweb/database/ATTENDANCE.FDB` to the same relative location on the Admin PC: `C:\AttendanceSystem\smartqweb\database\ATTENDANCE.FDB`
+- This file contains all employees, admins, and credentials
+- **Do not overwrite it** with a blank database later
+
+---
+
+### Step 3 — Create the `.env` File
+
+Create the file `C:\AttendanceSystem\smartqweb\server\.env` with this content:
+
+```env
+PORT=5000
+DB_HOST=localhost
+DB_PORT=3050
+DB_DATABASE=C:/AttendanceSystem/smartqweb/database/ATTENDANCE.FDB
+DB_USER=SYSDBA
+DB_PASSWORD=masterkey
+JWT_SECRET=replace_this_with_any_long_random_string
+NODE_ENV=production
+CORS_ORIGIN=http://localhost:5000
+```
+
+> CRITICAL: Use **forward slashes** in `DB_DATABASE` path even on Windows. Backslashes cause ODBC errors.
+> CRITICAL: Change `JWT_SECRET` to a unique random string. Any long string works (e.g. 40+ random characters).
+
+---
+
+### Step 4 — Install Dependencies
+
+Open PowerShell on the Admin PC:
+
+```powershell
+# Install web frontend dependencies
+cd C:\AttendanceSystem\smartqweb
+npm install
+
+# Install server dependencies
+cd C:\AttendanceSystem\smartqweb\server
+npm install
+```
+
+Both should complete without errors. If you see ODBC-related errors at this stage, ignore them — they only occur at runtime.
+
+---
+
+### Step 5 — Build the Production Bundle
+
+```powershell
+cd C:\AttendanceSystem\smartqweb
+npm run build:prod
+```
+
+This runs `vite build` (compiles React frontend into `dist/`) then `tsc` (compiles Express server into `server/dist/`). Should take 30–60 seconds. No errors expected.
+
+---
+
+### Step 6 — Open Firewall Port
+
+Running this once on the Admin PC allows the kiosk (Mini PC) and mobile to reach the server:
+
+```powershell
+New-NetFirewallRule -DisplayName "SmartQ Server" -Direction Inbound -Protocol TCP -LocalPort 5000 -Action Allow
+```
+
+---
+
+### Step 7 — Start the Server
+
+```powershell
+cd C:\AttendanceSystem\smartqweb
+npm run start:prod
+```
+
+Expected output:
+```
+✓ DB pool ready
+✓ Migrations complete
+Server running on port 5000
+```
+
+Open a browser on the Admin PC → `http://localhost:5000` → SmartQ login page should appear.
+
+> If you see a Firebird connection error, the ODBC driver is not installed or the `DB_DATABASE` path is wrong.
+
+---
+
+### Step 8 — Run as a Windows Service (NSSM — so it starts automatically)
+
+This keeps the server running after reboot without anyone manually running `npm run start:prod`.
+
+#### 8a. Download NSSM
+- Go to https://nssm.cc/download → download `nssm-2.24.zip` (or latest)
+- Extract, copy `nssm.exe` to `C:\Windows\System32\` (so it's on PATH)
+
+#### 8b. Install the service
+```powershell
+# Open PowerShell as Administrator
+nssm install SmartQServer
+```
+
+A GUI appears. Fill in:
+- **Path**: `C:\Program Files\nodejs\node.exe`
+- **Startup directory**: `C:\AttendanceSystem\smartqweb\server`
+- **Arguments**: `dist/index.js`
+
+Then click the **Environment** tab and add:
+```
+NODE_ENV=production
+```
+
+Click **Install service**, then:
+```powershell
+nssm start SmartQServer
+```
+
+#### 8c. Verify
+```powershell
+nssm status SmartQServer
+# Should print: SERVICE_RUNNING
+```
+
+Now the server auto-starts on boot. To stop/restart:
+```powershell
+nssm stop SmartQServer
+nssm restart SmartQServer
+```
+
+---
+
+### Step 9 — Find the Admin PC's Local IP
+
+```powershell
+ipconfig | findstr "IPv4"
+```
+
+Note the IP, e.g. `192.168.1.50`. This is what the kiosk and mobile need.
+
+---
+
+### Step 10 — Install the Kiosk on the Mini PC
+
+1. Copy `attendance-system/release/Attendance Kiosk Setup 0.0.1.exe` to the Mini PC
+2. Run the installer — installs to `C:\Users\<user>\AppData\Local\Programs\Attendance Kiosk\`
+3. Creates a Desktop shortcut and Start Menu entry
+4. Edit the config file to point at the Admin PC:
+   - Path: `C:\Users\<user>\AppData\Roaming\Attendance Kiosk\config.json`
+   - Content:
+     ```json
+     { "serverUrl": "http://192.168.1.50:5000" }
+     ```
+   - Replace `192.168.1.50` with the actual IP from Step 9
+5. Launch **Attendance Kiosk** from the Desktop shortcut
+6. Should load the kiosk UI and connect to the server
+
+> If the kiosk shows a blank screen or connection error: check the IP in `config.json`, confirm the server is running, and confirm the firewall rule from Step 6 was applied.
+
+---
+
+### Step 11 — Configure the Mobile App
+
+1. Install the Flutter app on the employee phones (APK sideload or via Flutter `adb install`)
+2. Open the app → tap ⚙️ icon → type `http://192.168.1.50:5000` → tap Save
+3. Test time-in: enter an employee ID → should show success with employee photo
+
+> Mobile app only works on same WiFi during this phase. Internet access setup is a separate step after deployment is stable.
+
+---
+
+### Step 12 — Verify Everything End-to-End
+
+| Test | Expected result |
+|---|---|
+| Browser on Admin PC → `http://localhost:5000` | SmartQ login page |
+| Login with SuperAdmin credentials | Dashboard loads, all nav items visible |
+| Kiosk on Mini PC → launch app | Kiosk home screen, clock visible |
+| Type an employee ID in kiosk | Success screen with employee name and photo |
+| Mobile app → type ID | Success screen |
+| Web admin → Search Attendance | Shows today's records |
+| Web admin → Employee List | Shows all 5 employees |
+| Reboot Admin PC | Server auto-restarts (NSSM), kiosk reconnects |
+
+---
+
+### Troubleshooting Quick Reference
+
+| Symptom | Fix |
+|---|---|
+| `ODBC driver not found` on server start | Install `Firebird_ODBC_*_x64.exe` from firebirdsql.org |
+| `Connection refused` on kiosk/mobile | Check IP in `config.json`, check firewall rule, check NSSM status |
+| Blank kiosk screen | Check `config.json` path and serverUrl format (`http://` not `https://`) |
+| Server starts but DB errors | Check `DB_DATABASE` path in `.env` (forward slashes, no quotes) |
+| Admin login fails | Ensure `ATTENDANCE.FDB` from dev machine was copied (has credentials) |
+| NSSM service not starting | Check Event Viewer → Windows Logs → Application for Node.js errors |
 
 ---
 
@@ -662,7 +900,9 @@ Do not begin until RFID/QR hardware is validated and the target PC deployment is
 
 17. **Module resolution**: Server uses ESM. Imports must use `.js` extensions even for `.ts` source files.
 
-18. **Mobile app is offline-only**: `mob_attendance/lib/main.dart` uses `SharedPreferences` only. NOT connected to API. Integration is the next major task.
+18. **Mobile app server URL default**: Default is `http://192.168.1.1:5000` (router IP). Must be changed in Settings screen to actual server IP before use.
+
+19. **Mobile internet access**: Currently WiFi-only. To enable remote access: use ngrok, port forwarding + DuckDNS, or Cloudflare Tunnel. No code changes needed — just update the Settings URL.
 
 ---
 
