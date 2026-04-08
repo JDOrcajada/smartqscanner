@@ -119,6 +119,12 @@ export async function runMigrations(): Promise<void> {
     console.log('  ✓ Added HOLIDAYS.HOLIDAY_TYPE');
   }
 
+  // 8. EMPLOYEES.QR_CODE — stores generated QR code as base64 data URL
+  if (!(await columnExists('EMPLOYEES', 'QR_CODE'))) {
+    await execute(`ALTER TABLE EMPLOYEES ADD QR_CODE BLOB SUB_TYPE TEXT`);
+    console.log('  ✓ Added EMPLOYEES.QR_CODE');
+  }
+
   // 7. Bootstrap SuperAdmin employee (Jonathan Gurap).
   // Always ensure the employee row has ROLE='ADMIN' regardless of prior runs.
   const empCheck = await query<any>(

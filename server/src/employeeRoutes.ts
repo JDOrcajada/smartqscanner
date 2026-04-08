@@ -47,7 +47,7 @@ employeeRouter.post('/', async (req: Request, res: Response) => {
 employeeRouter.put('/:id', async (req: Request, res: Response) => {
   const id = parseInt(req.params.id, 10);
   if (isNaN(id)) return res.status(400).json({ message: 'Invalid employee ID' });
-  const { employeeId, name, role, picture } = req.body;
+  const { employeeId, name, role, picture, qrCode } = req.body;
 
   if (employeeId !== undefined) {
     const parsedEmployeeId = Number(employeeId);
@@ -62,6 +62,7 @@ employeeRouter.put('/:id', async (req: Request, res: Response) => {
       name: name?.trim(),
       role: role?.trim(),
       picture: picture !== undefined ? picture : undefined,
+      qrCode: qrCode !== undefined ? qrCode : undefined,
     });
     if (!employee) return res.status(404).json({ message: 'Employee not found' });
 

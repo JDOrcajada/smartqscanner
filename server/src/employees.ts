@@ -5,6 +5,7 @@ export interface Employee {
   name: string;
   role: string;
   picture: string | null;
+  qrCode: string | null;
   status: string;
 }
 
@@ -12,20 +13,21 @@ const normalizeEmployeeId = (value: number): number => Math.trunc(value);
 
 export const getAllEmployees = async (): Promise<Employee[]> => {
   const rows = await query<any>(
-    'SELECT EMPLOYEE_ID, NAME, ROLE, PICTURE, STATUS FROM EMPLOYEES ORDER BY NAME'
+    'SELECT EMPLOYEE_ID, NAME, ROLE, PICTURE, QR_CODE, STATUS FROM EMPLOYEES ORDER BY NAME'
   );
   return rows.map((r) => ({
     id: r.employee_id,
     name: r.name ?? '',
     role: r.role ?? '',
     picture: r.picture ?? null,
+    qrCode: r.qr_code ?? null,
     status: r.status ?? 'ACTIVE',
   }));
 };
 
 export const getEmployeeById = async (id: number): Promise<Employee | null> => {
   const rows = await query<any>(
-    'SELECT EMPLOYEE_ID, NAME, ROLE, PICTURE, STATUS FROM EMPLOYEES WHERE EMPLOYEE_ID = ?',
+    'SELECT EMPLOYEE_ID, NAME, ROLE, PICTURE, QR_CODE, STATUS FROM EMPLOYEES WHERE EMPLOYEE_ID = ?',
     [id]
   );
   if (!rows.length) return null;
@@ -35,6 +37,7 @@ export const getEmployeeById = async (id: number): Promise<Employee | null> => {
     name: r.name ?? '',
     role: r.role ?? '',
     picture: r.picture ?? null,
+    qrCode: r.qr_code ?? null,
     status: r.status ?? 'ACTIVE',
   };
 };
@@ -65,13 +68,14 @@ export const createEmployee = async (data: {
     name: data.name,
     role: data.role ?? '',
     picture: null,
+    qrCode: null,
     status: 'ACTIVE',
   };
 };
 
 export const updateEmployee = async (
   id: number,
-  data: Partial<{ employeeId: number; name: string; role: string; picture: string | null }>
+  data: Partial<{ employeeId: number; name: string; role: string; picture: string | null; qrCode: string | null }>
 ): Promise<Employee | null> => {
   const existing = await getEmployeeById(id);
   if (!existing) return null;
@@ -96,12 +100,13 @@ export const updateEmployee = async (
     name: data.name ?? existing.name,
     role: data.role ?? existing.role,
     picture: data.picture !== undefined ? data.picture : existing.picture,
+    qrCode: data.qrCode !== undefined ? data.qrCode : existing.qrCode,
   };
 
   if (updated.id !== existing.id) {
     await execute(
-      'INSERT INTO EMPLOYEES (EMPLOYEE_ID, NAME, ROLE, PICTURE, STATUS, CREATED_AT) VALUES (?, ?, ?, ?, ?, ?)',
-      [updated.id, updated.name, updated.role || null, updated.picture || null, existing.status, new Date()]
+      'INSERT INTO EMPLOYEES (EMPLOYEE_ID, NAME, ROLE, PICTURE, QR_CODE, STATUS, CREATED_AT) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      [updated.id, updated.name, updated.role || null, updated.picture || null, updated.qrCode || null, existing.status, new Date()]
     );
 
     await execute('UPDATE ATTENDANCE_LOGS SET EMPLOYEE_ID = ? WHERE EMPLOYEE_ID = ?', [updated.id, existing.id]);
@@ -114,13 +119,14 @@ export const updateEmployee = async (
       name: updated.name,
       role: updated.role,
       picture: updated.picture,
+      qrCode: updated.qrCode,
       status: existing.status,
     };
   }
 
   await execute(
-    'UPDATE EMPLOYEES SET NAME = ?, ROLE = ?, PICTURE = ? WHERE EMPLOYEE_ID = ?',
-    [updated.name, updated.role || null, updated.picture || null, id]
+    'UPDATE EMPLOYEES SET NAME = ?, ROLE = ?, PICTURE = ?, QR_CODE = ? WHERE EMPLOYEE_ID = ?',
+    [updated.name, updated.role || null, updated.picture || null, updated.qrCode || null, id]
   );
 
   return {
@@ -128,6 +134,7 @@ export const updateEmployee = async (
     name: updated.name,
     role: updated.role,
     picture: updated.picture,
+    qrCode: updated.qrCode,
     status: existing.status,
   };
 };
