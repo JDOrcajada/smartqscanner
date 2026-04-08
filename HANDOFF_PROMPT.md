@@ -86,7 +86,7 @@ Driver={Firebird/InterBase(r) driver};Dbname=host/port:path;...
 - **Database**: Firebird 5.0 SuperServer on Windows, accessed via ODBC driver
 - **Auth**: `bcryptjs` for password hashing, `jsonwebtoken` (24h JWT in `localStorage` as `authToken`)
 - **Kiosk**: Electron wrapper around the Vite app (`attendance-system/electron/main.cjs`)
-- **Mobile**: Flutter (`mob_attendance/`) — cloned but not yet connected to API
+- **Mobile**: Flutter (`mob_attendance/`) — fully wired to Express API
 
 ---
 
@@ -583,12 +583,8 @@ Flutter app originally cloned from `https://github.com/matthewcandoy/mob_attenda
 - `shared_preferences: ^2.2.0` ← kept (for server URL only)
 - `image_picker` ← removed
 
-### Internet access (not yet implemented — easy to add later)
-The Settings screen accepts any URL. To expose the server to the internet after deployment:
-- **ngrok** (dev/testing): `ngrok http 5000` → paste the printed URL in mobile Settings
-- **Port forwarding + DuckDNS** (permanent): forward router port 5000 → Target PC; set up DuckDNS for stable hostname
-- **Cloudflare Tunnel** (no router access needed): `cloudflared tunnel run --url http://localhost:5000 smartq`
-No code changes needed for any of these — just update the URL in mobile Settings.
+### Internet access
+The Settings screen accepts any URL. See **Section 12, Step 12** of the Installation Guide for the full DuckDNS + port forwarding setup. No code changes needed — just update the URL in mobile Settings.
 
 ## 11. Pending Tasks
 
@@ -601,69 +597,15 @@ Kiosk and QR work in typed-input testing but real hardware not yet validated:
 2. Test QR scanner against generated QR codes
 3. Decide if leading-zero RFID strings need a separate field (currently numeric only)
 
-### STEP — Mobile Internet Access (post-deployment, no code change)
-
-**Chosen approach: Port Forwarding + DuckDNS.** Do this after the Target PC deployment is stable.
-
-No code changes required. Only update the mobile app Settings URL at the end.
-
-#### 1. Register a free DuckDNS hostname
-
-1. Go to https://www.duckdns.org → log in with Google
-2. Create a subdomain, e.g. `smartq-attendance` → you get `smartq-attendance.duckdns.org`
-3. Note your **token** (shown on the DuckDNS dashboard) — needed for the auto-update task
-
-#### 2. Install DuckDNS auto-updater on the Target PC
-
-Run this once in PowerShell as Administrator (replace `YOUR_SUBDOMAIN` and `YOUR_TOKEN`):
-
-```powershell
-$subdomain = "smartq-attendance"
-$token = "YOUR_DUCKDNS_TOKEN_HERE"
-$action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-WindowStyle Hidden -Command `"Invoke-WebRequest -Uri 'https://www.duckdns.org/update?domains=$subdomain&token=$token&ip=' -UseBasicParsing`""
-$trigger = New-ScheduledTaskTrigger -RepetitionInterval (New-TimeSpan -Minutes 5) -Once -At (Get-Date)
-Register-ScheduledTask -TaskName "DuckDNS Update" -Action $action -Trigger $trigger -RunLevel Highest -Force
-```
-
-This runs every 5 minutes and keeps DuckDNS pointing to the current public IP of the office.
-
-#### 3. Forward port 5000 on the office router
-
-1. Log into the router admin page (usually `http://192.168.1.1`)
-2. Find **Port Forwarding** (may be under NAT, Firewall, or Virtual Servers)
-3. Add a rule:
-   - External port: `5000`
-   - Internal IP: Target PC's local IP (run `ipconfig | findstr "IPv4"` on the Target PC to find it)
-   - Internal port: `5000`
-   - Protocol: TCP
-4. Save and apply
-
-#### 4. Update mobile app
-
-Open mobile app → ⚙️ gear icon → type `http://smartq-attendance.duckdns.org:5000` → Save
-
-#### Verify it works
-
-From a phone on **mobile data** (not WiFi), open the app and try clocking in. If it connects, internet access is working.
-
-#### Troubleshooting
-
-| Symptom | Fix |
-|---|---|
-| App times out / can't connect | Check port forwarding rule is saved on router |
-| DuckDNS hostname doesn't resolve | Check scheduled task ran (`Task Scheduler` → `DuckDNS Update`) |
-| Connection refused | Confirm the SmartQ firewall rule is applied on Target PC (Step 6 of deployment guide) |
-| Works on WiFi but not mobile data | ISP may be blocking the port — try an alternate external port (e.g. 8080 mapped to 5000 internally) |
-
 ### STEP — Facial Recognition
 
 Do not begin until RFID/QR hardware is validated and the target PC deployment is stable. This is intentionally last.
 
 ---
 
-## 12A. Target PC Transition Guide (Detailed)
+## 12. Installation & Deployment Guide
 
-This is a complete step-by-step guide to moving the system from the development machine to the target production PC (Admin PC) and Mini PC (kiosk).
+This is a complete step-by-step guide to moving the system from the development machine to the target production PC (Admin PC) and Mini PC (kiosk). Covers the web application, kiosk app, mobile app, and enabling internet access.
 
 ---
 
@@ -874,11 +816,65 @@ Note the IP, e.g. `192.168.1.50`. This is what the kiosk and mobile need.
 2. Open the app → tap ⚙️ icon → type `http://192.168.1.50:5000` → tap Save
 3. Test time-in: enter an employee ID → should show success with employee photo
 
-> Mobile app only works on same WiFi during this phase. Internet access setup is a separate step after deployment is stable.
+> Mobile app only works on same WiFi during this phase. For internet access over mobile data, complete Step 12 below after the system is stable on local WiFi.
 
 ---
 
-### Step 12 — Verify Everything End-to-End
+### Step 12 — Enable Mobile Internet Access (DuckDNS + Port Forwarding)
+
+**No code changes required.** Only network configuration and a URL update in the mobile app Settings.
+
+#### 1. Register a free DuckDNS hostname
+
+1. Go to https://www.duckdns.org → log in with Google
+2. Create a subdomain, e.g. `smartq-attendance` → you get `smartq-attendance.duckdns.org`
+3. Note your **token** (shown on the DuckDNS dashboard) — needed for the auto-update task
+
+#### 2. Install DuckDNS auto-updater on the Target PC
+
+Run this once in PowerShell as Administrator (replace `YOUR_SUBDOMAIN` and `YOUR_TOKEN`):
+
+```powershell
+$subdomain = "smartq-attendance"
+$token = "YOUR_DUCKDNS_TOKEN_HERE"
+$action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-WindowStyle Hidden -Command `"Invoke-WebRequest -Uri 'https://www.duckdns.org/update?domains=$subdomain&token=$token&ip=' -UseBasicParsing`""
+$trigger = New-ScheduledTaskTrigger -RepetitionInterval (New-TimeSpan -Minutes 5) -Once -At (Get-Date)
+Register-ScheduledTask -TaskName "DuckDNS Update" -Action $action -Trigger $trigger -RunLevel Highest -Force
+```
+
+This runs every 5 minutes and keeps DuckDNS pointing to the current public IP of the office.
+
+#### 3. Forward port 5000 on the office router
+
+1. Log into the router admin page (usually `http://192.168.1.1`)
+2. Find **Port Forwarding** (may be under NAT, Firewall, or Virtual Servers)
+3. Add a rule:
+   - External port: `5000`
+   - Internal IP: Target PC's local IP (run `ipconfig | findstr "IPv4"` on the Target PC to find it)
+   - Internal port: `5000`
+   - Protocol: TCP
+4. Save and apply
+
+#### 4. Update mobile app
+
+Open mobile app → ⚙️ gear icon → type `http://smartq-attendance.duckdns.org:5000` → Save
+
+#### Verify it works
+
+From a phone on **mobile data** (not WiFi), open the app and try clocking in. If it connects, internet access is working.
+
+#### Troubleshooting
+
+| Symptom | Fix |
+|---|---|
+| App times out / can't connect | Check port forwarding rule is saved on router |
+| DuckDNS hostname doesn't resolve | Check scheduled task ran (`Task Scheduler` → `DuckDNS Update`) |
+| Connection refused | Confirm the SmartQ firewall rule (Step 6 of this guide) is applied on the Target PC |
+| Works on WiFi but not mobile data | ISP may be blocking the port — try an alternate external port (e.g. 8080 mapped to 5000 internally) |
+
+---
+
+### Step 13 — Verify Everything End-to-End
 
 | Test | Expected result |
 |---|---|
@@ -906,7 +902,7 @@ Note the IP, e.g. `192.168.1.50`. This is what the kiosk and mobile need.
 
 ---
 
-## 12. Known Issues & Gotchas
+## 13. Known Issues & Gotchas
 
 1. **ODBC driver must be installed**: If server fails to connect, the Firebird ODBC driver is not installed on this machine. Download and install from https://firebirdsql.org/en/odbc-driver/ (64-bit). No DSN entry needed.
 
@@ -952,7 +948,7 @@ Note the IP, e.g. `192.168.1.50`. This is what the kiosk and mobile need.
 
 ---
 
-## 13. File Tree Reference
+## 14. File Tree Reference
 
 ```
 smartqweb/
@@ -1004,6 +1000,6 @@ attendance-system/
 └── src/app/components/
     └── KioskHome.tsx
 
-mob_attendance/                     ← Flutter mobile app (NOT yet wired to API)
-└── lib/main.dart                   ← Uses SharedPreferences only; integration pending
+mob_attendance/                     ← Flutter mobile app (fully wired to Express API)
+└── lib/main.dart                   ← Settings screen for runtime server URL; zero Dart errors
 ```
