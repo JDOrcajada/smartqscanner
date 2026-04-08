@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from "react";
-import { Plus, Pencil, Trash2, X, AlertTriangle, User } from "lucide-react";
+import { Plus, Pencil, Trash2, X, AlertTriangle, User, QrCode, Download } from "lucide-react";
+import QRCodeLib from 'qrcode';
 import { API_BASE } from '../../imports/api';
 
 interface Employee {
@@ -7,6 +8,7 @@ interface Employee {
   name: string;
   role: string;
   picture: string | null;
+  qrCode: string | null;
   status: string;
 }
 
@@ -45,6 +47,13 @@ export function EmployeeList() {
 
   // Picture modal
   const [pictureModal, setPictureModal] = useState<Employee | null>(null);
+
+  // QR state
+  const [qrViewModal, setQrViewModal] = useState<Employee | null>(null);
+  const [showQrPasswordConfirm, setShowQrPasswordConfirm] = useState(false);
+  const [qrPassword, setQrPassword] = useState('');
+  const [qrError, setQrError] = useState('');
+  const [qrLoading, setQrLoading] = useState(false);
 
   const selectedEmployee = employees.find((e) => e.id === selectedId) ?? null;
 
@@ -131,6 +140,67 @@ export function EmployeeList() {
     await fetchEmployees();
     window.dispatchEvent(new Event("profile-updated"));
     setPictureModal(null);
+  };
+
+  // ── QR Handlers ──────────────────────────────────────────────
+  const handleGenerateQR = () => {
+    if (!selectedEmployee) return;
+    if (selectedEmployee.qrCode) {
+      setQrPassword('');
+      setQrError('');
+      setShowQrPasswordConfirm(true);
+    } else {
+      generateAndSaveQR(selectedEmployee);
+    }
+  };
+
+  const generateAndSaveQR = async (emp: Employee) => {
+    setQrLoading(true);
+    setQrError('');
+    try {
+      const dataUrl = await QRCodeLib.toDataURL(String(emp.id), {
+        errorCorrectionLevel: 'M',
+        margin: 2,
+        width: 300,
+        color: { dark: '#000000', light: '#ffffff' },
+      });
+      const res = await fetch(`${API}/employees/${emp.id}`, {
+        method: 'PUT',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({ qrCode: dataUrl }),
+      });
+      if (!res.ok) {
+        const d = await res.json();
+        throw new Error(d.message);
+      }
+      await fetchEmployees();
+      setShowQrPasswordConfirm(false);
+      setQrPassword('');
+    } catch (err: any) {
+      setQrError(err.message);
+    } finally {
+      setQrLoading(false);
+    }
+  };
+
+  const handleQrPasswordConfirm = async () => {
+    if (!selectedEmployee) return;
+    if (!qrPassword) { setQrError('Password is required.'); return; }
+    setQrLoading(true);
+    setQrError('');
+    try {
+      const res = await fetch(`${API}/auth/verify-password`, {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({ password: qrPassword }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message);
+      await generateAndSaveQR(selectedEmployee);
+    } catch (err: any) {
+      setQrError(err.message);
+      setQrLoading(false);
+    }
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -267,6 +337,18 @@ export function EmployeeList() {
             </button>
 
             {selectedId && (
+              <button
+                onClick={handleGenerateQR}
+                disabled={qrLoading}
+                className="flex items-center gap-2 px-4 py-2 text-sm text-white rounded-lg transition-colors hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed"
+                style={{ backgroundColor: "#6D28D9" }}
+              >
+                <QrCode className="w-4 h-4" />
+                {selectedEmployee?.qrCode ? 'Regenerate QR' : 'Generate QR'}
+              </button>
+            )}
+
+            {selectedId && (
               <span className="ml-auto text-sm text-gray-500">
                 Selected:{" "}
                 <span className="font-semibold text-gray-800">
@@ -304,6 +386,9 @@ export function EmployeeList() {
                       Photo
                     </th>
                     <th className="px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">
+                      QR Code
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">
                       Status
                     </th>
                   </tr>
@@ -312,7 +397,7 @@ export function EmployeeList() {
                   {employees.length === 0 ? (
                     <tr>
                       <td
-                        colSpan={5}
+                        colSpan={6}
                         className="px-6 py-12 text-center text-gray-400"
                       >
                         No employees found. Click Insert to add one.
@@ -355,6 +440,21 @@ export function EmployeeList() {
                                   </div>
                               }
                             </button>
+                          </td>
+                          <td className="px-6 py-3 text-sm text-gray-600">
+                            {emp.qrCode ? (
+                              <button
+                                onClick={(e) => { e.stopPropagation(); setQrViewModal(emp); }}
+                                className="focus:outline-none"
+                                title="View QR Code"
+                              >
+                                <img src={emp.qrCode} className="w-10 h-10 rounded object-contain border border-gray-200" alt="QR" />
+                              </button>
+                            ) : (
+                              <div className="w-10 h-10 rounded bg-gray-100 flex items-center justify-center" title="No QR generated">
+                                <QrCode className="w-5 h-5 text-gray-300" />
+                              </div>
+                            )}
                           </td>
                           <td className="px-6 py-3 text-sm">
                             <span
@@ -585,6 +685,79 @@ export function EmployeeList() {
                 </button>
               )}
               <p className="text-xs text-gray-400 text-center">For best results, use a square photo under 500KB.</p>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* ── QR View Modal ── */}
+      {qrViewModal && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-sm mx-4 p-6">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-semibold text-gray-900">QR Code</h3>
+              <button onClick={() => setQrViewModal(null)} className="text-gray-400 hover:text-gray-600">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="flex flex-col items-center gap-3">
+              <p className="text-sm text-gray-600 text-center">
+                <span className="font-semibold">{qrViewModal.name}</span>
+                <span className="text-gray-400 ml-2">#{qrViewModal.id}</span>
+              </p>
+              <img src={qrViewModal.qrCode!} alt="QR Code" className="w-56 h-56 object-contain rounded border border-gray-200 p-2" />
+              <a
+                href={qrViewModal.qrCode!}
+                download={`qr_${qrViewModal.id}_${qrViewModal.name.replace(/\s+/g, '_')}.png`}
+                className="flex items-center gap-2 px-4 py-2 text-sm text-white rounded-lg hover:opacity-90 transition-colors"
+                style={{ backgroundColor: '#32AD32' }}
+              >
+                <Download className="w-4 h-4" />
+                Download QR
+              </a>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── QR Regeneration Password Confirm ── */}
+      {showQrPasswordConfirm && selectedEmployee && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-sm mx-4 p-6">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-10 h-10 rounded-full bg-amber-100 flex items-center justify-center shrink-0">
+                <QrCode className="w-5 h-5 text-amber-600" />
+              </div>
+              <h3 className="text-lg font-semibold text-gray-900">Confirm Regeneration</h3>
+            </div>
+            <p className="text-sm text-gray-600 mb-4">
+              <strong>{selectedEmployee.name}</strong> already has a QR code. Enter your admin password to regenerate it. The old QR code will stop working.
+            </p>
+            <input
+              type="password"
+              value={qrPassword}
+              onChange={(e) => { setQrPassword(e.target.value); setQrError(''); }}
+              placeholder="Admin password"
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-1 mb-3"
+              autoFocus
+              onKeyDown={(e) => e.key === 'Enter' && handleQrPasswordConfirm()}
+            />
+            {qrError && <p className="text-sm text-red-600 mb-3">{qrError}</p>}
+            <div className="flex gap-3">
+              <button
+                onClick={handleQrPasswordConfirm}
+                disabled={qrLoading}
+                className="flex-1 py-2.5 text-sm text-white rounded-lg disabled:opacity-50 transition-colors hover:opacity-90"
+                style={{ backgroundColor: '#6D28D9' }}
+              >
+                {qrLoading ? 'Generating...' : 'Confirm & Regenerate'}
+              </button>
+              <button
+                onClick={() => { setShowQrPasswordConfirm(false); setQrError(''); }}
+                disabled={qrLoading}
+                className="px-5 py-2.5 text-sm border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors disabled:opacity-50"
+              >
+                Cancel
+              </button>
             </div>
           </div>
         </div>

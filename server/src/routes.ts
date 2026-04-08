@@ -1,5 +1,6 @@
 import { Router } from 'express';
-import { signup, login } from './auth.js';
+import { signup, login, verifyAdminPassword } from './auth.js';
+import { authenticate } from './middleware.js';
 
 const authRouter = Router();
 
@@ -42,6 +43,22 @@ authRouter.post('/login', async (req, res) => {
   } catch (error: any) {
     console.error('Login error:', error);
     return res.status(500).json({ message: 'Internal server error' });
+  }
+});
+
+// POST /api/auth/verify-password — verify the calling admin's password (for guarded UI actions)
+authRouter.post('/verify-password', authenticate, async (req: any, res: any) => {
+  try {
+    const { password } = req.body;
+    const employeeId = req.user?.employeeId;
+    if (!password || !employeeId) {
+      return res.status(400).json({ message: 'Password is required' });
+    }
+    const valid = await verifyAdminPassword(employeeId, password);
+    if (!valid) return res.status(401).json({ message: 'Incorrect password' });
+    return res.json({ valid: true });
+  } catch (err: any) {
+    return res.status(500).json({ message: err.message });
   }
 });
 
