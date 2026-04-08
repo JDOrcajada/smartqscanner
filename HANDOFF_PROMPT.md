@@ -603,11 +603,57 @@ Kiosk and QR work in typed-input testing but real hardware not yet validated:
 
 ### STEP — Mobile Internet Access (post-deployment, no code change)
 
-The mobile app Works on local WiFi today. To enable remote access after deployment, pick one:
-- **ngrok**: `ngrok http 5000` → paste printed URL into mobile Settings → done (URL changes on restart)
-- **Port forwarding + DuckDNS**: forward router port 5000 → Target PC IP; register free hostname at duckdns.org
-- **Cloudflare Tunnel**: `cloudflared tunnel run --url http://localhost:5000 smartq` (no router access needed)
-No code changes required for any option.
+**Chosen approach: Port Forwarding + DuckDNS.** Do this after the Target PC deployment is stable.
+
+No code changes required. Only update the mobile app Settings URL at the end.
+
+#### 1. Register a free DuckDNS hostname
+
+1. Go to https://www.duckdns.org → log in with Google
+2. Create a subdomain, e.g. `smartq-attendance` → you get `smartq-attendance.duckdns.org`
+3. Note your **token** (shown on the DuckDNS dashboard) — needed for the auto-update task
+
+#### 2. Install DuckDNS auto-updater on the Target PC
+
+Run this once in PowerShell as Administrator (replace `YOUR_SUBDOMAIN` and `YOUR_TOKEN`):
+
+```powershell
+$subdomain = "smartq-attendance"
+$token = "YOUR_DUCKDNS_TOKEN_HERE"
+$action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-WindowStyle Hidden -Command `"Invoke-WebRequest -Uri 'https://www.duckdns.org/update?domains=$subdomain&token=$token&ip=' -UseBasicParsing`""
+$trigger = New-ScheduledTaskTrigger -RepetitionInterval (New-TimeSpan -Minutes 5) -Once -At (Get-Date)
+Register-ScheduledTask -TaskName "DuckDNS Update" -Action $action -Trigger $trigger -RunLevel Highest -Force
+```
+
+This runs every 5 minutes and keeps DuckDNS pointing to the current public IP of the office.
+
+#### 3. Forward port 5000 on the office router
+
+1. Log into the router admin page (usually `http://192.168.1.1`)
+2. Find **Port Forwarding** (may be under NAT, Firewall, or Virtual Servers)
+3. Add a rule:
+   - External port: `5000`
+   - Internal IP: Target PC's local IP (run `ipconfig | findstr "IPv4"` on the Target PC to find it)
+   - Internal port: `5000`
+   - Protocol: TCP
+4. Save and apply
+
+#### 4. Update mobile app
+
+Open mobile app → ⚙️ gear icon → type `http://smartq-attendance.duckdns.org:5000` → Save
+
+#### Verify it works
+
+From a phone on **mobile data** (not WiFi), open the app and try clocking in. If it connects, internet access is working.
+
+#### Troubleshooting
+
+| Symptom | Fix |
+|---|---|
+| App times out / can't connect | Check port forwarding rule is saved on router |
+| DuckDNS hostname doesn't resolve | Check scheduled task ran (`Task Scheduler` → `DuckDNS Update`) |
+| Connection refused | Confirm the SmartQ firewall rule is applied on Target PC (Step 6 of deployment guide) |
+| Works on WiFi but not mobile data | ISP may be blocking the port — try an alternate external port (e.g. 8080 mapped to 5000 internally) |
 
 ### STEP — Facial Recognition
 
