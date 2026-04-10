@@ -30,14 +30,18 @@ authRouter.post('/login', async (req, res) => {
     const { employeeId, password } = req.body;
 
     if (!employeeId || !password) {
+      console.log(`[AUTH] 400 Bad Request — missing employeeId or password`);
       return res.status(400).json({ message: 'Employee ID and password are required' });
     }
 
     const result = await login(employeeId, password);
 
     if (!result.success) {
+      console.log(`[AUTH] 401 Login failed — employeeId: ${employeeId} — reason: ${result.message}`);
       return res.status(401).json(result);
     }
+
+    console.log(`[AUTH] Login successful — employeeId: ${employeeId}`);
 
     return res.status(200).json(result);
   } catch (error: any) {
